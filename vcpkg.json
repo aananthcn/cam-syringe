@@ -1,0 +1,11 @@
+{
+  "name": "camsyringe",
+  "version": "0.1.0",
+  "description": "PC-side camera & sensor data injector for automotive ADAS HIL testing",
+  "dependencies": [
+    {
+      "name": "ffmpeg",
+      "features": ["x264"]
+    }
+  ]
+}
