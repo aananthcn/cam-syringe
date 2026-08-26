@@ -120,6 +120,12 @@ since camsyringe streams locally regardless (see the main `README.md`'s
 own note on this). A target-side rejection (wrong/unconfigured QCarCam
 id) shows an error banner on just that camera's tile, not a crash.
 
+## Windows
+
+CamSyringe isn't a native Windows app (BLF/Ethernet replay needs a raw
+Linux socket family with no Windows equivalent) — see
+`release/windows/README.md` for running it on Windows via WSL2 instead.
+
 ## Files here
 
 ```
@@ -128,5 +134,6 @@ release/
                                   comment for the full runtime-dependency
                                   reasoning)
   README.md                      this file
+  windows/                       WSL2-based Windows setup (see its own README.md)
   artifacts/                     gitignored -- where built bundles land
 ```
