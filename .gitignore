@@ -1,2 +1,5 @@
 build/
 vcpkg_installed/
+
+# release bundles -- built by release/create-bundle.sh, not checked in
+release/artifacts/
