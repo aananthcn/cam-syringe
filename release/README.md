@@ -2,33 +2,30 @@
 
 This directory holds the PC-side release process: one script that
 packages a built `camsyringe` into something a teammate can install and
-run on their own Linux PC without needing the C++ build toolchain (Qt6/
-FFmpeg `-dev` headers, cmake, the `vector_blf` submodule) at all.
+run on their own Linux PC with **zero extra steps** -- no `apt install`,
+no C++ build toolchain, nothing beyond the one file. Bundles could end up
+anywhere on a receiving machine that may not have this source tree, or
+any dev tooling, on it at all, so the bundle carries everything it needs.
 
 ## What `create-cam-syringe-bundle.sh` does
 
-Builds `camsyringe` and packages it together with `libVector_BLF` --
-**this project's own vendored/patched library, the one thing that
-genuinely can't come from `apt install`** -- into a single
-self-extracting `.bin` file, plus a small `run-camsyringe.sh` launcher
-that points the bundled library at the binary correctly.
+Builds `camsyringe` and packages it together with its **entire runtime
+dependency closure** -- Qt6, FFmpeg, X11/xcb, and everything they need in
+turn, ~140 shared libraries, computed dynamically via `ldd` against the
+real built binaries every time this script runs (not a hand-maintained
+list, which would go stale the moment Qt/FFmpeg gets updated on the
+build machine) -- plus Qt's `xcb` platform plugin (required to open a
+window at all; Qt `dlopen()`s this at runtime, so it doesn't show up in
+camsyringe's own `ldd` output the way a normal dependency would, and it
+pulls in real additional libraries of its own). Only the true kernel/
+glibc syscall-ABI set (libc, libm, libdl, libpthread, the dynamic linker
+itself) is left out -- that's the one category actually risky to bundle
+across different machines, and safe to assume present on any x86_64
+Linux system. Everything else -- including this project's own vendored
+`libVector_BLF` -- travels with the bundle.
 
-It deliberately does **not** bundle Qt6/FFmpeg/X11 themselves, unlike
-qcarcam-injector's target-side bundle (which has no equivalent of
-`apt install` on a fixed QNX BSP image). On a PC, those are standard
-Ubuntu packages -- bundling FFmpeg's own full transitive dependency
-closure by hand would mean vendoring 100+ shared libraries (confirmed via
-`ldd` against the real binary: every optional codec/muxer/protocol the
-distro's `libavformat` package pulls in, from x264 to librsvg to
-zeromq), which would be both enormous and fragile across Ubuntu point
-releases. `run-camsyringe.sh` checks the handful of runtime packages
-camsyringe actually links against directly are installed, and prints the
-exact `apt-get install` command if anything's missing, rather than
-failing with a cryptic "error while loading shared libraries."
-
-See the script's own header comment for the full reasoning and exactly
-how the runtime package list was determined (`dpkg -S` against the real
-linked libraries, not guessed).
+See the script's own header comment for the full reasoning, and its
+`EXCLUDE_SONAME_RE` for the exact (short) exclusion list.
 
 ## Building a bundle
 
@@ -46,22 +43,31 @@ bundles are build output, not source; distribute them separately, e.g.
 attached to a GitHub Release or shared drive, not committed to this
 repo).
 
+Note the bundle is considerably larger than just the binary now (~180MB,
+vs ~8MB for a version that relied on the receiving machine's own Qt6/
+FFmpeg packages) -- that's the real cost of "zero extra install steps,"
+not a bug.
+
 Useful options (see `./create-cam-syringe-bundle.sh --help` for the full list):
 - `--output PATH` -- write somewhere other than the default
   `release/artifacts/camsyringe_bundle_vX.Y.bin`.
 - `--build-dir PATH` -- use a build directory other than `build/`.
+- `--qt-plugin-dir PATH` -- if Qt6's plugins aren't at the default
+  `/usr/lib/x86_64-linux-gnu/qt6/plugins` on your build machine, point
+  this at wherever `platforms/libqxcb.so` actually lives.
 - `--compress` -- gzip the payload for a smaller file.
 
 ## Installing and running the bundle
 
 ### What you need
 
-- **A Linux PC** (this bundle is not portable to Windows/macOS --
-  camsyringe itself is Linux-only, see the main `README.md`).
-- The one file: `camsyringe_bundle_vX.Y.bin`.
-- `sudo` access, ONLY if the Qt6/FFmpeg runtime packages listed below
-  aren't already installed -- the bundle itself needs no special
-  privileges to install or run.
+- **A Linux PC, x86_64** (this bundle is not portable to Windows/macOS --
+  camsyringe itself is Linux-only, see the main `README.md` -- nor to
+  ARM). Doesn't need to be Ubuntu specifically, or have anything from
+  this project on it already -- the bundle carries its own Qt6/FFmpeg/X11
+  closure rather than relying on the receiving machine's own packages.
+- The one file: `camsyringe_bundle_vX.Y.bin`. No `sudo` needed for
+  anything -- installing and running both work as a normal user.
 
 ### 1. Copy the bundle over and install it
 
@@ -85,20 +91,10 @@ CAMSYRINGE_INSTALL_DIR=/some/other/dir /tmp/camsyringe_bundle_v0.5.bin
 ~/camsyringe/run-camsyringe.sh
 ```
 
-The first time, this may print something like:
-
-```
-camsyringe: missing runtime package(s): libqt6widgets6 libavformat58
-Install with:
-  sudo apt-get install -y libqt6widgets6 libavformat58
-```
-
-Run the printed command once, then re-run `run-camsyringe.sh` -- after
-that, everything's in place for good (these are normal system packages,
-not something this bundle needs to redo). With no arguments, camsyringe
-opens its Configure dialog on launch; see the main `README.md`'s "Run"
-section for the full CLI flags (`--target`, `--cam-ids`, `--blf-file`,
-etc.) if you want to script a session instead.
+That's it -- no package install step, nothing else to check first. With
+no arguments, camsyringe opens its Configure dialog on launch; see the
+main `README.md`'s "Run" section for the full CLI flags (`--target`,
+`--cam-ids`, `--blf-file`, etc.) if you want to script a session instead.
 
 **BLF/Ethernet replay** (the "Replay BLF Ethernet capture" checkbox in
 Configure, or `--blf-file`) additionally needs `CAP_NET_RAW` on the

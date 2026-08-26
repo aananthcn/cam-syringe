@@ -3,62 +3,80 @@
 #
 # create-cam-syringe-bundle.sh
 #
-# Packages a built camsyringe binary together with its ONE non-standard
-# runtime dependency (libVector_BLF, this project's own vendored BLF
-# parser -- not a distro package) into a single self-extracting .bin
-# installer, for a team member's Linux PC to install and run without
-# needing the C++ build toolchain (Qt6/FFmpeg -dev headers, cmake, the
-# vector_blf submodule) at all -- same self-extracting-.bin technique
-# qcarcam-injector's own release/create-bundle.sh uses (header script +
-# embedded tar payload after an __ARCHIVE_BELOW__ marker), for a
-# consistent experience across both this project's and that one's
-# release process.
+# Packages a built camsyringe binary together with its ENTIRE runtime
+# dependency closure (Qt6, FFmpeg, X11/xcb, and everything THEY need in
+# turn -- confirmed via `ldd`, not guessed) into a single self-extracting
+# .bin installer, for a team member's Linux PC to install and run with
+# ZERO extra steps -- no `apt install`, no C++ build toolchain, nothing
+# beyond the one file. Same self-extracting-.bin technique
+# qcarcam-injector's own release/create-qcarcam-inj-bundle.sh uses (header
+# script + embedded tar payload after an __ARCHIVE_BELOW__ marker), for a
+# consistent experience across both this project's and that one's release
+# process.
+#
+# CHANGED from an earlier version of this script: that version bundled
+# ONLY libVector_BLF (this project's own non-distro dependency) and had
+# run-camsyringe.sh check for Qt6/FFmpeg via `dpkg -s`, printing an apt
+# command if missing -- i.e. it still required the receiving machine to
+# `apt install` a handful of packages first. Explicitly reversed: a
+# bundle that still requires *any* install step on the receiving machine
+# defeats the actual point of sharing a single file with a team whose
+# machines may not have this source tree, or any dev tooling, at all.
+# Every `.so` camsyringe (or Qt's xcb platform plugin, see below) actually
+# needs is now bundled directly.
 #
 # What gets bundled, and why:
 #   - build/camsyringe itself.
-#   - build/third_party/vector_blf/.../libVector_BLF.so* (all three --
-#     the real file plus its SONAME and unversioned symlinks) -- this is
-#     THIS project's own vendored/patched library (see
-#     third_party/vector_blf's own commit fixing a real
-#     heap-use-after-free race), not a distro package, so it's the one
-#     thing that genuinely can't come from `apt install` on the
-#     tester's own machine.
-#
-# Deliberately NOT bundled -- unlike qcarcam-injector's bundle (which
-# bundles ffmpeg/SDL2 because there's no equivalent of "apt install" on a
-# QNX target's fixed BSP image), Qt6/FFmpeg/X11 here are ALL standard
-# Ubuntu packages any team PC either already has or can install with one
-# apt command -- see RUNTIME_PACKAGES below, and the main README.md's own
-# Prerequisites section (same packages, just -dev variants for building
-# vs. plain runtime variants for just running). Bundling FFmpeg's full
-# transitive dependency closure by hand (confirmed via `ldd` against the
-# real built binary: over 100 shared libraries once every optional
-# codec/muxer/protocol libavformat's Ubuntu package pulls in is counted --
-# x264, x265, aom, dav1d, gnutls, zmq, rsvg, cairo, pango, and many more)
-# would be both enormous and extremely fragile across even slightly
-# different Ubuntu point releases -- `apt install` already solves exactly
-# this problem correctly, so this script leans on it instead of
-# reinventing it. run-camsyringe.sh (staged into the bundle, see below)
-# checks for these packages at RUN time and prints the exact apt command
-# if anything's missing, rather than a cryptic "error while loading
-# shared libraries".
+#   - The FULL transitive `ldd` closure of camsyringe AND of Qt's `xcb`
+#     platform plugin (libqxcb.so -- REQUIRED to open a window at all;
+#     Qt dlopen()s it at runtime based on QT_QPA_PLATFORM, so it does
+#     NOT show up in camsyringe's own `ldd` output the way a normal link
+#     dependency would, and confirmed via `ldd` against libqxcb.so
+#     itself to pull in real additional libraries beyond camsyringe's own
+#     closure: libQt6XcbQpa.so.6, a dozen libxcb-* extension libraries,
+#     libX11-xcb/libSM/libICE, etc). Computed dynamically at BUNDLE-BUILD
+#     time via collect_deps() below, not a hand-maintained static list --
+#     confirmed the hard way that a static list goes stale the moment
+#     Qt/FFmpeg/their transitive deps get updated on the build machine;
+#     re-deriving it from the real binaries every time this script runs
+#     is the only way to keep it honest.
+#   - EXCLUDED from that closure: only the true kernel/glibc syscall-ABI
+#     set (libc, libm, libdl, libpthread, librt, the ld.so dynamic linker
+#     itself, linux-vdso which isn't a real file at all) -- see
+#     EXCLUDE_SONAME_RE below. These are the one category of library
+#     that's actually RISKY to bundle across different machines (glibc is
+#     tightly coupled to the kernel's syscall ABI; a foreign libc/ld.so
+#     can break things worse than not bundling at all) and safe to assume
+#     present on literally any x86_64 Linux system -- unlike everything
+#     else in the closure (Qt, FFmpeg's ~140 optional-codec transitive
+#     libraries, X11/xcb, cairo/pango/fontconfig/freetype, gnutls/
+#     openssl, systemd, even a stray /usr/local/cuda-*/lib64/libOpenCL.so
+#     this particular build machine happens to have installed), none of
+#     which is safe to assume present on a teammate's machine, hence
+#     bundled.
+#   - Qt's xcb platform plugin itself
+#     (plugins/platforms/libqxcb.so) -- without it, Qt can't create any
+#     window at all on a normal X11 desktop, regardless of how complete
+#     the rest of the library closure is.
 #
 # Running the produced .bin:
-#   - Installs into <install-dir>/bin/camsyringe,
-#     <install-dir>/lib/libVector_BLF.so* , and
+#   - Installs into <install-dir>/bin/camsyringe, <install-dir>/lib/*.so*
+#     (the full closure), <install-dir>/plugins/platforms/libqxcb.so, and
 #     <install-dir>/run-camsyringe.sh (default install-dir
 #     $HOME/camsyringe -- no root needed, unlike the QNX bundle's /aos).
 #   - ADDITIVE, same convention as qcarcam-injector's bundle -- never
-#     rm -rf's <install-dir>, just creates bin/lib if missing and
+#     rm -rf's <install-dir>, just creates bin/lib/plugins if missing and
 #     extracts on top.
-#   - run-camsyringe.sh is the entry point testers actually use: checks
-#     the runtime apt packages are present (warns + prints the install
-#     command if not, doesn't silently fail), sets LD_LIBRARY_PATH so
-#     the bundled libVector_BLF.so.2 is found (camsyringe's own embedded
+#   - run-camsyringe.sh is the entry point testers actually use: sets
+#     LD_LIBRARY_PATH to the bundled lib/ (camsyringe's own embedded
 #     RUNPATH points at this BUILD MACHINE's absolute build directory --
 #     confirmed via readelf, useless once relocated -- LD_LIBRARY_PATH
 #     takes priority over a DT_RUNPATH entry, so this reliably overrides
-#     it), then execs the real binary with all args forwarded.
+#     it) and QT_QPA_PLATFORM_PLUGIN_PATH to the bundled plugins/platforms
+#     (so Qt finds the bundled libqxcb.so instead of looking for a system
+#     Qt install that may not exist), then execs the real binary with
+#     every argument forwarded. No package-manager check of any kind --
+#     there is nothing left for the receiving machine to install.
 #
 # Usage:
 #   ./create-cam-syringe-bundle.sh <version-no> [options]
@@ -81,24 +99,28 @@ COMPRESS=0
 SKIP_BUILD=0
 POSITIONAL=()
 
-# Confirmed via `dpkg -S "$(realpath ...)"` against the real linked
-# libraries on this build machine (Ubuntu 22.04/jammy) -- the runtime
-# (not -dev) packages that own each shared library camsyringe actually
-# links against directly (libavdevice/libavfilter/etc are FFmpeg's own
-# transitive deps, pulled in automatically by these packages' own
-# dependencies, not needed here explicitly). Package names/versions are
-# distro-specific -- if a tester's PC is on a different Ubuntu release
-# with different SONAMEs (e.g. libavformat59 instead of 58), update this
-# list and re-verify with the same dpkg -S technique.
-RUNTIME_PACKAGES=(libqt6widgets6 libqt6core6 libqt6gui6 libavformat58 libavcodec58 libavutil56 libswscale5)
+# Qt dlopen()s its platform plugin at runtime -- not a normal link
+# dependency, so it must be located separately from camsyringe's own
+# `ldd` output. Overridable in case a different machine's Qt6 packaging
+# puts plugins somewhere else (confirmed via `find / -path '*qt6/plugins*'`
+# if this default doesn't resolve).
+QT_PLUGIN_DIR="${QT_PLUGIN_DIR:-/usr/lib/x86_64-linux-gnu/qt6/plugins}"
+
+# The one category of library actually risky to bundle across different
+# machines (glibc/ld.so are tightly coupled to the kernel's syscall ABI)
+# and safe to assume present on any x86_64 Linux system -- see header
+# comment. Everything else `ldd` reports gets bundled.
+EXCLUDE_SONAME_RE='^(linux-vdso\.so|libc\.so|libm\.so|libdl\.so|libpthread\.so|librt\.so|ld-linux.*\.so)'
 
 usage() {
     cat <<EOF
 Usage: $(basename "$0") <version-no> [options]
 
-Packages the built camsyringe binary + libVector_BLF (this project's own
-non-distro dependency) into a self-extracting .bin installer for a
-teammate's Linux PC.
+Packages the built camsyringe binary together with its ENTIRE runtime
+dependency closure (Qt6, FFmpeg, X11/xcb, everything they need in turn --
+computed via ldd, not a static list) into a self-extracting .bin
+installer for a teammate's Linux PC. Zero extra install steps on the
+receiving machine.
 
 Arguments:
   <version-no>      Bundle version (e.g. 0.5) -- REQUIRED, always the
@@ -108,25 +130,28 @@ Arguments:
                      installer/run script.
 
 Options:
-  --build-dir PATH  Build directory to pull camsyringe/libVector_BLF from.
-                     (default: $BUILD_DIR)
-  --output PATH     Output path for the generated self-extracting .bin,
-                     overriding the default versioned filename.
-                     (default: release/artifacts/camsyringe_bundle_v<version-no>.bin)
-  --skip-build      Don't (re)build first -- package whatever's already
-                     in --build-dir as-is. Default: runs a clean
-                     cmake --build first, so the bundle always reflects
-                     the current source tree.
-  --compress        gzip the embedded payload (smaller .bin; needs
-                     gunzip on the installing machine -- present on any
-                     normal Ubuntu desktop, default: no compression).
-  -h, --help        Show this help and exit.
+  --build-dir PATH     Build directory to pull camsyringe/libVector_BLF from.
+                        (default: $BUILD_DIR)
+  --qt-plugin-dir PATH  Where to find Qt6's plugins/platforms/libqxcb.so.
+                        (default: $QT_PLUGIN_DIR)
+  --output PATH        Output path for the generated self-extracting .bin,
+                        overriding the default versioned filename.
+                        (default: release/artifacts/camsyringe_bundle_v<version-no>.bin)
+  --skip-build          Don't (re)build first -- package whatever's already
+                        in --build-dir as-is. Default: runs a clean
+                        cmake --build first, so the bundle always reflects
+                        the current source tree.
+  --compress            gzip the embedded payload (smaller .bin; needs
+                        gunzip on the installing machine -- present on any
+                        normal Ubuntu desktop, default: no compression).
+  -h, --help            Show this help and exit.
 EOF
 }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --build-dir) BUILD_DIR="$2"; shift 2 ;;
+        --qt-plugin-dir) QT_PLUGIN_DIR="$2"; shift 2 ;;
         --output) OUTPUT_BIN="$2"; shift 2 ;;
         --skip-build) SKIP_BUILD=1; shift ;;
         --compress) COMPRESS=1; shift ;;
@@ -155,6 +180,7 @@ fi
 
 CAMSYRINGE_BIN="$BUILD_DIR/camsyringe"
 VECTOR_BLF_DIR="$BUILD_DIR/third_party/vector_blf/src/Vector/BLF"
+QXCB_PLUGIN="$QT_PLUGIN_DIR/platforms/libqxcb.so"
 
 if [[ ! -f "$CAMSYRINGE_BIN" ]]; then
     echo "ERROR: $CAMSYRINGE_BIN not found -- build it first (see README.md) or drop --skip-build." >&2
@@ -164,6 +190,10 @@ if ! compgen -G "$VECTOR_BLF_DIR/libVector_BLF.so*" >/dev/null; then
     echo "ERROR: no libVector_BLF.so* found under $VECTOR_BLF_DIR -- build it first (see README.md) or drop --skip-build." >&2
     exit 1
 fi
+if [[ ! -f "$QXCB_PLUGIN" ]]; then
+    echo "ERROR: Qt6 xcb platform plugin not found at $QXCB_PLUGIN -- override with --qt-plugin-dir (find it with: find / -path '*qt6/plugins/platforms/libqxcb.so' 2>/dev/null)." >&2
+    exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # 1. Stage the payload
@@ -171,44 +201,64 @@ fi
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 
-mkdir -p "$STAGE/bin" "$STAGE/lib"
+mkdir -p "$STAGE/bin" "$STAGE/lib" "$STAGE/plugins/platforms"
 
 echo "Staging camsyringe binary..."
 install -m 0755 "$CAMSYRINGE_BIN" "$STAGE/bin/camsyringe"
 
-echo "Staging libVector_BLF.so* (with SONAME symlinks)..."
+echo "Staging libVector_BLF.so* (this project's own, with SONAME symlinks)..."
 cp -a "$VECTOR_BLF_DIR"/libVector_BLF.so* "$STAGE/lib/"
 
-echo "Staging run-camsyringe.sh (dependency-checking launcher)..."
+echo "Staging Qt xcb platform plugin..."
+install -m 0755 "$QXCB_PLUGIN" "$STAGE/plugins/platforms/libqxcb.so"
+
+# Real dependency closure, computed now against the actual binaries --
+# see header comment for why this is derived, not a static list. Skips
+# anything already staged (libVector_BLF, self-references) and the
+# kernel/glibc exclusion set.
+echo "Resolving full runtime dependency closure (ldd)..."
+declare -A STAGED
+for f in "$STAGE/lib"/*; do
+    STAGED["$(basename "$f")"]=1
+done
+
+collect_and_copy() {
+    local bin="$1"
+    local soname resolved
+    while read -r soname resolved; do
+        [[ -z "$soname" ]] && continue
+        [[ "$soname" =~ $EXCLUDE_SONAME_RE ]] && continue
+        [[ -n "${STAGED[$soname]:-}" ]] && continue
+        if [[ -z "$resolved" || ! -e "$resolved" ]]; then
+            echo "  WARNING: could not resolve '$soname' (needed by $(basename "$bin")) -- skipping, camsyringe may fail to start if this is actually required" >&2
+            continue
+        fi
+        cp -L "$resolved" "$STAGE/lib/$soname"
+        STAGED["$soname"]=1
+    done < <(ldd "$bin" 2>/dev/null | awk '{print $1, $3}')
+}
+
+collect_and_copy "$CAMSYRINGE_BIN"
+collect_and_copy "$QXCB_PLUGIN"
+echo "  -> ${#STAGED[@]} shared librar$([[ ${#STAGED[@]} -eq 1 ]] && echo y || echo ies) staged (closure + libVector_BLF)"
+
+echo "Staging run-camsyringe.sh..."
 cat > "$STAGE/run-camsyringe.sh" <<'RUNNER_EOF'
 #!/bin/sh
-# Launcher for the camsyringe bundle -- checks the runtime apt packages
-# this bundle deliberately does NOT vendor itself are present (see
-# release/create-cam-syringe-bundle.sh's own header comment for why), points
-# LD_LIBRARY_PATH at the bundled libVector_BLF (camsyringe's own embedded
-# RUNPATH points at the ORIGINAL build machine's absolute path, useless
-# here -- LD_LIBRARY_PATH correctly overrides it), then execs the real
-# binary with every argument forwarded.
+# Launcher for the camsyringe bundle -- points LD_LIBRARY_PATH at the
+# bundled lib/ (camsyringe's own embedded RUNPATH points at the ORIGINAL
+# build machine's absolute path, useless here -- LD_LIBRARY_PATH
+# correctly overrides it) and QT_QPA_PLATFORM_PLUGIN_PATH at the bundled
+# xcb plugin (Qt dlopen()s this at runtime; without pointing it here, Qt
+# would look for a system Qt6 install that may not exist), then execs the
+# real binary with every argument forwarded. No package-manager check --
+# see release/create-cam-syringe-bundle.sh's own header comment for why
+# this bundle needs nothing else installed.
 set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-RUNTIME_PACKAGES="libqt6widgets6 libqt6core6 libqt6gui6 libavformat58 libavcodec58 libavutil56 libswscale5"
-MISSING=""
-for pkg in $RUNTIME_PACKAGES; do
-    if ! dpkg -s "$pkg" >/dev/null 2>&1; then
-        MISSING="$MISSING $pkg"
-    fi
-done
-if [ -n "$MISSING" ]; then
-    echo "camsyringe: missing runtime package(s):$MISSING" >&2
-    echo "Install with:" >&2
-    echo "  sudo apt-get install -y$MISSING" >&2
-    echo "(if your distro's package names/versions differ, see release/create-cam-syringe-bundle.sh's" >&2
-    echo " own RUNTIME_PACKAGES comment for how these were determined)" >&2
-    exit 1
-fi
-
 export LD_LIBRARY_PATH="$SCRIPT_DIR/lib:${LD_LIBRARY_PATH:-}"
+export QT_QPA_PLATFORM_PLUGIN_PATH="$SCRIPT_DIR/plugins/platforms"
 exec "$SCRIPT_DIR/bin/camsyringe" "$@"
 RUNNER_EOF
 chmod +x "$STAGE/run-camsyringe.sh"
@@ -254,7 +304,8 @@ BUNDLE_VERSION="$VERSION"
 cat > "$HEADER" <<HEADER_EOF
 #!/bin/sh
 # Self-extracting camsyringe bundle installer (v${BUNDLE_VERSION}):
-# camsyringe + libVector_BLF + run-camsyringe.sh.
+# camsyringe + its full runtime dependency closure (Qt6/FFmpeg/X11/xcb)
+# + run-camsyringe.sh. Nothing else needs installing on this machine.
 # Generated by release/create-cam-syringe-bundle.sh.
 set -e
 
@@ -264,9 +315,9 @@ echo "camsyringe bundle installer (v${BUNDLE_VERSION})"
 echo "Install directory: \$INSTALL_DIR"
 
 # Additive install, same convention as qcarcam-injector's bundle -- never
-# rm -rf's \$INSTALL_DIR itself, just ensures bin/lib exist and extracts
-# on top of whatever's already there.
-mkdir -p "\$INSTALL_DIR/bin" "\$INSTALL_DIR/lib"
+# rm -rf's \$INSTALL_DIR itself, just ensures bin/lib/plugins exist and
+# extracts on top of whatever's already there.
+mkdir -p "\$INSTALL_DIR/bin" "\$INSTALL_DIR/lib" "\$INSTALL_DIR/plugins"
 
 echo "Extracting bundle..."
 ARCHIVE_LINE=\$(awk '/^__ARCHIVE_BELOW__\$/ { print NR + 1; exit 0 }' "\$0")
@@ -276,7 +327,7 @@ echo "Installation complete."
 echo ""
 echo "Run with:"
 echo "  \$INSTALL_DIR/run-camsyringe.sh"
-echo "(checks required Qt6/FFmpeg runtime packages are installed, then launches)"
+echo "(fully self-contained -- nothing else needs installing)"
 
 exit 0
 __ARCHIVE_BELOW__
