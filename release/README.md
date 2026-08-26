@@ -36,7 +36,7 @@ From this directory, on your Linux build machine (needs this project's
 own build Prerequisites -- see the main `README.md`):
 
 ```bash
-./create-cam-syringe-bundle.sh --version 0.5
+./create-cam-syringe-bundle.sh 0.5
 ```
 
 This builds `camsyringe` fresh (pass `--skip-build` to package an

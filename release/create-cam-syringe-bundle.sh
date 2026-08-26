@@ -61,10 +61,10 @@
 #     it), then execs the real binary with all args forwarded.
 #
 # Usage:
-#   ./create-cam-syringe-bundle.sh [options]
+#   ./create-cam-syringe-bundle.sh <version-no> [options]
 #
 # Example:
-#   ./create-cam-syringe-bundle.sh --version 0.5
+#   ./create-cam-syringe-bundle.sh 0.5
 #   scp artifacts/camsyringe_bundle_v0.5.bin teammate@pc:/tmp/
 #   ssh teammate@pc '/tmp/camsyringe_bundle_v0.5.bin && ~/camsyringe/run-camsyringe.sh'
 #
@@ -79,6 +79,7 @@ OUTPUT_BIN=""
 INSTALL_DIR_DEFAULT="\$HOME/camsyringe"
 COMPRESS=0
 SKIP_BUILD=0
+POSITIONAL=()
 
 # Confirmed via `dpkg -S "$(realpath ...)"` against the real linked
 # libraries on this build machine (Ubuntu 22.04/jammy) -- the runtime
@@ -93,22 +94,25 @@ RUNTIME_PACKAGES=(libqt6widgets6 libqt6core6 libqt6gui6 libavformat58 libavcodec
 
 usage() {
     cat <<EOF
-Usage: $(basename "$0") [options]
+Usage: $(basename "$0") <version-no> [options]
 
 Packages the built camsyringe binary + libVector_BLF (this project's own
 non-distro dependency) into a self-extracting .bin installer for a
 teammate's Linux PC.
 
+Arguments:
+  <version-no>      Bundle version (e.g. 0.5) -- REQUIRED, always the
+                     first argument. Baked into the output filename
+                     (artifacts/camsyringe_bundle_v<version-no>.bin,
+                     unless --output overrides it) and printed by the
+                     installer/run script.
+
 Options:
-  --version X.Y     Bundle version, baked into the default output
-                     filename (artifacts/camsyringe_bundle_vX.Y.bin) and
-                     printed by the installer/run script. Required unless
-                     --output is given explicitly.
   --build-dir PATH  Build directory to pull camsyringe/libVector_BLF from.
                      (default: $BUILD_DIR)
-  --output PATH     Output path for the generated self-extracting .bin.
-                     (default: release/artifacts/camsyringe_bundle_vX.Y.bin,
-                     X.Y from --version)
+  --output PATH     Output path for the generated self-extracting .bin,
+                     overriding the default versioned filename.
+                     (default: release/artifacts/camsyringe_bundle_v<version-no>.bin)
   --skip-build      Don't (re)build first -- package whatever's already
                      in --build-dir as-is. Default: runs a clean
                      cmake --build first, so the bundle always reflects
@@ -122,22 +126,24 @@ EOF
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --version) VERSION="$2"; shift 2 ;;
         --build-dir) BUILD_DIR="$2"; shift 2 ;;
         --output) OUTPUT_BIN="$2"; shift 2 ;;
         --skip-build) SKIP_BUILD=1; shift ;;
         --compress) COMPRESS=1; shift ;;
         -h|--help) usage; exit 0 ;;
-        *) echo "Unknown argument: $1" >&2; usage; exit 1 ;;
+        --*) echo "Unknown argument: $1" >&2; usage; exit 1 ;;
+        *) POSITIONAL+=("$1"); shift ;;
     esac
 done
 
+if [[ ${#POSITIONAL[@]} -eq 0 ]]; then
+    echo "ERROR: <version-no> is required as the first argument (e.g. '$(basename "$0") 0.5')." >&2
+    usage
+    exit 1
+fi
+VERSION="${POSITIONAL[0]}"
+
 if [[ -z "$OUTPUT_BIN" ]]; then
-    if [[ -z "$VERSION" ]]; then
-        echo "ERROR: --version X.Y is required (or pass --output explicitly)." >&2
-        usage
-        exit 1
-    fi
     OUTPUT_BIN="$SCRIPT_DIR/artifacts/camsyringe_bundle_v${VERSION}.bin"
 fi
 
@@ -238,7 +244,7 @@ trap 'rm -rf "$STAGE" "$PAYLOAD" "$HEADER"' EXIT
 DECOMPRESS_CMD="cat"
 [[ $COMPRESS -eq 1 ]] && DECOMPRESS_CMD="gunzip -dc"
 
-BUNDLE_VERSION="${VERSION:-unversioned}"
+BUNDLE_VERSION="$VERSION"
 
 # Header is plain POSIX sh, same convention as qcarcam-injector's own
 # installer -- not strictly required on a PC (bash is a safe assumption
