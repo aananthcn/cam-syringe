@@ -5,7 +5,7 @@ packages a built `camsyringe` into something a teammate can install and
 run on their own Linux PC without needing the C++ build toolchain (Qt6/
 FFmpeg `-dev` headers, cmake, the `vector_blf` submodule) at all.
 
-## What `create-bundle.sh` does
+## What `create-cam-syringe-bundle.sh` does
 
 Builds `camsyringe` and packages it together with `libVector_BLF` --
 **this project's own vendored/patched library, the one thing that
@@ -36,7 +36,7 @@ From this directory, on your Linux build machine (needs this project's
 own build Prerequisites -- see the main `README.md`):
 
 ```bash
-./create-bundle.sh --version 0.5
+./create-cam-syringe-bundle.sh --version 0.5
 ```
 
 This builds `camsyringe` fresh (pass `--skip-build` to package an
@@ -46,7 +46,7 @@ bundles are build output, not source; distribute them separately, e.g.
 attached to a GitHub Release or shared drive, not committed to this
 repo).
 
-Useful options (see `./create-bundle.sh --help` for the full list):
+Useful options (see `./create-cam-syringe-bundle.sh --help` for the full list):
 - `--output PATH` -- write somewhere other than the default
   `release/artifacts/camsyringe_bundle_vX.Y.bin`.
 - `--build-dir PATH` -- use a build directory other than `build/`.
@@ -128,8 +128,9 @@ id) shows an error banner on just that camera's tile, not a crash.
 
 ```
 release/
-  create-bundle.sh   the packaging script (see its own header comment
-                      for the full runtime-dependency reasoning)
-  README.md          this file
-  artifacts/          gitignored -- where built bundles land
+  create-cam-syringe-bundle.sh   the packaging script (see its own header
+                                  comment for the full runtime-dependency
+                                  reasoning)
+  README.md                      this file
+  artifacts/                     gitignored -- where built bundles land
 ```
