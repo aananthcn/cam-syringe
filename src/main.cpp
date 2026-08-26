@@ -1,34 +1,204 @@
-#include "camera/CameraStream.h"
+#include "camera/PortScheme.h"
+#include "camera/StreamPool.h"
+#include "ui/MainWindow.h"
+
+#include <QApplication>
 
 #include <cstdio>
 #include <cstdlib>
+#include <set>
 #include <string>
+#include <vector>
 
 namespace {
-constexpr int kCameraPort = 5004;
+
+constexpr const char* kDefaultTarget = "192.168.1.1";
+constexpr int kDefaultControlPort = 5000;
+constexpr int kMinCamId = 1;
+constexpr int kMaxCamId = 16; // this target's allcamtest range, see qcarcam-injector/ARCHITECTURE.md
+
+void printUsage(const char* prog) {
+    std::fprintf(
+        stderr,
+        "usage: %s [--target [user@]<target>] [--control-port N] [--cam-ids IDS] [--playall]\n"
+        "       %*s[--inject-only] [--qcx-bypass] [<video1> [<video2> [<video3> [<video4>]]]]\n"
+        "  --target TARGET    target host (default: %s)\n"
+        "  --control-port N   qcarcam_dispatcher's control-channel port on the target\n"
+        "                     (default: %d)\n"
+        "  --cam-ids IDS      QCarCam id for each video file, comma-separated, in the same\n"
+        "                     order -- REQUIRED if any video files are given. A dash within\n"
+        "                     one entry expands to an inclusive range (e.g. 1-3,8 means\n"
+        "                     1,2,3,8). Each id must be 1-%d and unique.\n"
+        "  --inject-only      Target-side: skip the local Screen/EGL preview render on the\n"
+        "                     target entirely -- pure injection into qcxserver (see\n"
+        "                     qcarcam_dispatcher's own --inject-only flag)\n"
+        "  --qcx-bypass       Target-side: skip qcxserver entirely (diagnostic -- see\n"
+        "                     qcarcam_injector's own --qcx-bypass flag)\n"
+        "  --playall          start streaming immediately (requires at least one video file)\n"
+        "  With no arguments at all, opens the camera configuration dialog on launch.\n",
+        prog, static_cast<int>(std::string("usage: ").size() + std::string(prog).size() + 1), "",
+        kDefaultTarget, kDefaultControlPort, kMaxCamId);
 }
 
+// Comma-separated QCarCam ids, e.g. "8,9,1,2" -- a dash within one entry
+// expands to an inclusive range, e.g. "1-3,8" -> {1,2,3,8}. Comma (not
+// dash) is the entry separator specifically because a dash by itself is
+// ambiguous the moment ids go double-digit or a range is wanted (e.g.
+// "1-2-8-9" can't tell a delimiter dash from a range dash apart) -- see
+// qcarcam-injector's own CAM/FLAGS line protocol for the same reasoning.
+bool parseCamIds(const std::string& spec, std::vector<int>& outIds, std::string& error) {
+    outIds.clear();
+    size_t pos = 0;
+    while (pos < spec.size()) {
+        size_t comma = spec.find(',', pos);
+        std::string token =
+            spec.substr(pos, comma == std::string::npos ? std::string::npos : comma - pos);
+        pos = comma == std::string::npos ? spec.size() : comma + 1;
+        if (token.empty()) {
+            error = "empty entry in --cam-ids";
+            return false;
+        }
+        size_t dash = token.find('-');
+        if (dash != std::string::npos && dash > 0 && dash + 1 < token.size()) {
+            int a = std::atoi(token.substr(0, dash).c_str());
+            int b = std::atoi(token.substr(dash + 1).c_str());
+            if (a <= 0 || b <= 0 || a > b) {
+                error = "invalid range '" + token + "' in --cam-ids";
+                return false;
+            }
+            for (int v = a; v <= b; ++v) {
+                outIds.push_back(v);
+            }
+        } else {
+            int v = std::atoi(token.c_str());
+            if (v <= 0) {
+                error = "invalid id '" + token + "' in --cam-ids";
+                return false;
+            }
+            outIds.push_back(v);
+        }
+    }
+    if (outIds.empty()) {
+        error = "--cam-ids must not be empty";
+        return false;
+    }
+    std::set<int> seen;
+    for (int id : outIds) {
+        if (id < kMinCamId || id > kMaxCamId) {
+            error = "camera id " + std::to_string(id) + " out of range (" +
+                     std::to_string(kMinCamId) + "-" + std::to_string(kMaxCamId) + ")";
+            return false;
+        }
+        if (!seen.insert(id).second) {
+            error = "duplicate camera id " + std::to_string(id) + " in --cam-ids";
+            return false;
+        }
+    }
+    return true;
+}
+
+} // namespace
+
 int main(int argc, char** argv) {
-    if (argc != 3) {
-        std::fprintf(stderr, "usage: %s <input.mp4> [user@]<host>\n", argv[0]);
+    std::string targetArg;
+    int controlPort = kDefaultControlPort;
+    std::string camIdsArg;
+    bool playAll = false;
+    bool injectOnly = false;
+    bool qcxBypass = false;
+    std::vector<std::string> videoFiles;
+
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--target") {
+            if (i + 1 >= argc) {
+                printUsage(argv[0]);
+                return EXIT_FAILURE;
+            }
+            targetArg = argv[++i];
+        } else if (arg.rfind("--target=", 0) == 0) {
+            targetArg = arg.substr(9);
+        } else if (arg == "--control-port") {
+            if (i + 1 >= argc) {
+                printUsage(argv[0]);
+                return EXIT_FAILURE;
+            }
+            controlPort = std::atoi(argv[++i]);
+        } else if (arg == "--cam-ids") {
+            if (i + 1 >= argc) {
+                printUsage(argv[0]);
+                return EXIT_FAILURE;
+            }
+            camIdsArg = argv[++i];
+        } else if (arg == "--playall") {
+            playAll = true;
+        } else if (arg == "--inject-only") {
+            injectOnly = true;
+        } else if (arg == "--qcx-bypass") {
+            qcxBypass = true;
+        } else if (arg.rfind("--", 0) == 0) {
+            std::fprintf(stderr, "unknown option: %s\n", arg.c_str());
+            printUsage(argv[0]);
+            return EXIT_FAILURE;
+        } else {
+            if (static_cast<int>(videoFiles.size()) >= camsyringe::kMaxCameras) {
+                std::fprintf(stderr, "too many video files (max %d)\n", camsyringe::kMaxCameras);
+                return EXIT_FAILURE;
+            }
+            videoFiles.push_back(arg);
+        }
+    }
+
+    if (playAll && videoFiles.empty()) {
+        std::fprintf(stderr, "--playall requires at least one video file\n");
+        printUsage(argv[0]);
         return EXIT_FAILURE;
     }
 
-    std::string hostArg = argv[2];
-    auto at = hostArg.find('@');
-    std::string host = at == std::string::npos ? hostArg : hostArg.substr(at + 1);
-    std::string destUrl = "rtp://" + host + ":" + std::to_string(kCameraPort);
-
-    camsyringe::CameraStream stream(argv[1], destUrl);
-    if (!stream.open()) {
-        return EXIT_FAILURE;
+    std::vector<int> camIds;
+    if (!videoFiles.empty()) {
+        if (camIdsArg.empty()) {
+            std::fprintf(stderr, "--cam-ids is required when video files are given\n");
+            printUsage(argv[0]);
+            return EXIT_FAILURE;
+        }
+        std::string error;
+        if (!parseCamIds(camIdsArg, camIds, error)) {
+            std::fprintf(stderr, "%s\n", error.c_str());
+            return EXIT_FAILURE;
+        }
+        if (camIds.size() != videoFiles.size()) {
+            std::fprintf(stderr, "--cam-ids gave %zu id(s) but %zu video file(s) were given\n",
+                          camIds.size(), videoFiles.size());
+            return EXIT_FAILURE;
+        }
     }
 
-    std::fprintf(stderr,
-                 "camsyringe: streaming '%s' -> %s (H.264/MPEG-TS-in-RTP, zerolatency, looping "
-                 "-- Ctrl+C to stop)\n",
-                 argv[1], destUrl.c_str());
-    stream.run();
-    std::fprintf(stderr, "camsyringe: done\n");
-    return EXIT_SUCCESS;
+    std::string target = targetArg.empty() ? kDefaultTarget : targetArg;
+    auto at = target.find('@');
+    if (at != std::string::npos) {
+        target = target.substr(at + 1);
+    }
+
+    QApplication app(argc, argv);
+
+    camsyringe::StreamPool pool;
+    for (size_t i = 0; i < videoFiles.size(); ++i) {
+        int port = camsyringe::kBasePort + static_cast<int>(i) * camsyringe::kPortStep;
+        camsyringe::CameraConfig cfg;
+        cfg.inputPath = videoFiles[i];
+        cfg.destUrl = "rtp://" + target + ":" + std::to_string(port);
+        cfg.label = "cam" + std::to_string(i);
+        cfg.index = static_cast<int>(i);
+        cfg.camId = camIds[i];
+        cfg.port = port;
+        pool.addCamera(std::move(cfg));
+    }
+
+    camsyringe::ui::MainWindow window(&pool, QString::fromStdString(target), controlPort, injectOnly,
+                                       qcxBypass, playAll);
+    window.resize(1280, 720);
+    window.show();
+
+    return app.exec();
 }
