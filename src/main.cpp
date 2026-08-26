@@ -16,12 +16,14 @@ constexpr const char* kDefaultTarget = "192.168.1.1";
 constexpr int kDefaultControlPort = 5000;
 constexpr int kMinCamId = 1;
 constexpr int kMaxCamId = 16; // this target's allcamtest range, see qcarcam-injector/ARCHITECTURE.md
+constexpr const char* kDefaultBlfInterface = "enp6s0";
 
 void printUsage(const char* prog) {
     std::fprintf(
         stderr,
         "usage: %s [--target [user@]<target>] [--control-port N] [--cam-ids IDS] [--playall]\n"
-        "       %*s[--inject-only] [--qcx-bypass] [<video1> [<video2> [<video3> [<video4>]]]]\n"
+        "       %*s[--inject-only] [--qcx-bypass] [--blf-file PATH] [--blf-interface IFACE]\n"
+        "       %*s[<video1> [<video2> [<video3> [<video4>]]]]\n"
         "  --target TARGET    target host (default: %s)\n"
         "  --control-port N   qcarcam_dispatcher's control-channel port on the target\n"
         "                     (default: %d)\n"
@@ -34,10 +36,16 @@ void printUsage(const char* prog) {
         "                     qcarcam_dispatcher's own --inject-only flag)\n"
         "  --qcx-bypass       Target-side: skip qcxserver entirely (diagnostic -- see\n"
         "                     qcarcam_injector's own --qcx-bypass flag)\n"
+        "  --blf-file PATH    Vector BLF file to replay (Ethernet-frame objects only, see\n"
+        "                     src/blf/BlfLoader.h) as raw AF_PACKET frames, original timing,\n"
+        "                     verbatim (no header rewriting). Needs CAP_NET_RAW -- see\n"
+        "                     README.md. Requires --blf-interface too.\n"
+        "  --blf-interface IFACE  Network interface to replay onto (default: %s)\n"
         "  --playall          start streaming immediately (requires at least one video file)\n"
         "  With no arguments at all, opens the camera configuration dialog on launch.\n",
         prog, static_cast<int>(std::string("usage: ").size() + std::string(prog).size() + 1), "",
-        kDefaultTarget, kDefaultControlPort, kMaxCamId);
+        static_cast<int>(std::string("usage: ").size() + std::string(prog).size() + 1), "",
+        kDefaultTarget, kDefaultControlPort, kMaxCamId, kDefaultBlfInterface);
 }
 
 // Comma-separated QCarCam ids, e.g. "8,9,1,2" -- a dash within one entry
@@ -106,6 +114,8 @@ int main(int argc, char** argv) {
     bool playAll = false;
     bool injectOnly = false;
     bool qcxBypass = false;
+    std::string blfFile;
+    std::string blfInterface = kDefaultBlfInterface;
     std::vector<std::string> videoFiles;
 
     for (int i = 1; i < argc; ++i) {
@@ -136,6 +146,18 @@ int main(int argc, char** argv) {
             injectOnly = true;
         } else if (arg == "--qcx-bypass") {
             qcxBypass = true;
+        } else if (arg == "--blf-file") {
+            if (i + 1 >= argc) {
+                printUsage(argv[0]);
+                return EXIT_FAILURE;
+            }
+            blfFile = argv[++i];
+        } else if (arg == "--blf-interface") {
+            if (i + 1 >= argc) {
+                printUsage(argv[0]);
+                return EXIT_FAILURE;
+            }
+            blfInterface = argv[++i];
         } else if (arg.rfind("--", 0) == 0) {
             std::fprintf(stderr, "unknown option: %s\n", arg.c_str());
             printUsage(argv[0]);
@@ -196,7 +218,8 @@ int main(int argc, char** argv) {
     }
 
     camsyringe::ui::MainWindow window(&pool, QString::fromStdString(target), controlPort, injectOnly,
-                                       qcxBypass, playAll);
+                                       qcxBypass, QString::fromStdString(blfFile),
+                                       QString::fromStdString(blfInterface), playAll);
     window.resize(1280, 720);
     window.show();
 

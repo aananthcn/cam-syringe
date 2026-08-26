@@ -4,8 +4,10 @@
 #include <QMainWindow>
 #include <QString>
 
+#include <thread>
 #include <vector>
 
+#include "blf/BlfReplayer.h"
 #include "net/DispatcherClient.h"
 
 class QGridLayout;
@@ -58,8 +60,8 @@ public:
     // (no CLI video files given) and startImmediately is false, the
     // Camera dialog is opened automatically once the window is shown.
     explicit MainWindow(camsyringe::StreamPool* pool, QString initialTarget, int initialControlPort,
-                         bool initialInjectOnly, bool initialQcxBypass, bool startImmediately,
-                         QWidget* parent = nullptr);
+                         bool initialInjectOnly, bool initialQcxBypass, QString initialBlfPath,
+                         QString initialBlfInterface, bool startImmediately, QWidget* parent = nullptr);
     ~MainWindow() override = default;
 
 protected:
@@ -92,8 +94,19 @@ private:
     int controlPort_ = 5000;
     bool injectOnly_ = false;
     bool qcxBypass_ = false;
+    // Empty blfPath_ means BLF/Ethernet replay is disabled this session --
+    // startStreaming() checks that, not a separate enabled bool, same
+    // convention as CameraConfigDialog::blfPath().
+    QString blfPath_;
+    QString blfInterface_;
     PlaybackState state_ = PlaybackState::Idle;
     camsyringe::DispatcherClient dispatcherClient_;
+    // Owned directly here (not inside StreamPool) since it's a single,
+    // session-wide replay independent of camera count -- BlfReplayer.h's
+    // own class comment covers why this needs its own thread the same way
+    // StreamPool manages one thread per camera internally.
+    camsyringe::BlfReplayer blfReplayer_;
+    std::thread blfThread_;
 
     QGridLayout* grid_ = nullptr;
     QAction* playPauseAction_ = nullptr;

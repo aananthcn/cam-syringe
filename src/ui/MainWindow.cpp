@@ -11,6 +11,7 @@
 #include <QGridLayout>
 #include <QMenuBar>
 #include <QMetaObject>
+#include <QStatusBar>
 #include <QTimer>
 #include <QWidget>
 
@@ -32,14 +33,16 @@ QString portFromDestUrl(const std::string& destUrl) {
 } // namespace
 
 MainWindow::MainWindow(camsyringe::StreamPool* pool, QString initialTarget, int initialControlPort,
-                        bool initialInjectOnly, bool initialQcxBypass, bool startImmediately,
-                        QWidget* parent)
+                        bool initialInjectOnly, bool initialQcxBypass, QString initialBlfPath,
+                        QString initialBlfInterface, bool startImmediately, QWidget* parent)
     : QMainWindow(parent),
       pool_(pool),
       currentTarget_(std::move(initialTarget)),
       controlPort_(initialControlPort),
       injectOnly_(initialInjectOnly),
-      qcxBypass_(initialQcxBypass) {
+      qcxBypass_(initialQcxBypass),
+      blfPath_(std::move(initialBlfPath)),
+      blfInterface_(std::move(initialBlfInterface)) {
     auto* central = new QWidget(this);
     grid_ = new QGridLayout(central);
     setCentralWidget(central);
@@ -165,6 +168,32 @@ void MainWindow::startStreaming() {
     pool_->startAll();
     applyState(PlaybackState::Playing);
 
+    // BLF/Ethernet replay, if configured -- shares pool_'s own Timeline
+    // origin (just captured by the startAll() call above) so it stays
+    // phase-aligned with the camera streams, matching CONTEXT.md's
+    // Architecture diagram (one shared Timeline orchestrator). open() does
+    // the (synchronous, on this GUI thread) BLF parse + raw socket
+    // open/bind -- both fast (BLF parse is a local file read, no network
+    // wait, unlike the camera declaration below) so this doesn't need the
+    // same "start first, confirm async" treatment DispatcherClient gets.
+    if (!blfPath_.isEmpty()) {
+        statusBar()->setStyleSheet(QString());
+        statusBar()->clearMessage();
+        if (blfReplayer_.open(blfPath_.toStdString(), blfInterface_.toStdString())) {
+            blfReplayer_.setStartOrigin(pool_->timelineOriginNs());
+            blfThread_ = std::thread([this] { blfReplayer_.run(); });
+        } else {
+            // Also logged to stderr by BlfReplayer::open() itself; this is
+            // the GUI-visible equivalent, since a GUI session may have no
+            // visible console. Disabled for the rest of this session (no
+            // retry on a later Pause->Play) -- re-enable via Configure.
+            statusBar()->setStyleSheet("color: red;");
+            statusBar()->showMessage(
+                tr("BLF replay disabled: %1").arg(QString::fromStdString(blfReplayer_.lastError())));
+            blfPath_.clear();
+        }
+    }
+
     for (auto* widget : cameraWidgets_) {
         widget->showStatus(tr("Confirming target injection…"));
     }
@@ -240,6 +269,10 @@ void MainWindow::onDeclareComplete(std::vector<CameraDeclareOutcome> outcomes, b
 void MainWindow::stopEverything() {
     pool_->stopAll();
     dispatcherClient_.disconnect(); // the target-side teardown signal
+    blfReplayer_.requestStop();
+    if (blfThread_.joinable()) {
+        blfThread_.join();
+    }
 }
 
 void MainWindow::onPlayPauseTriggered() {
@@ -257,6 +290,8 @@ void MainWindow::onStopTriggered() {
         widget->resetIdle();
         widget->clearError();
     }
+    statusBar()->setStyleSheet(QString());
+    statusBar()->clearMessage();
     applyState(PlaybackState::Idle);
 }
 
@@ -273,7 +308,7 @@ void MainWindow::onConfigureTriggered() {
     }
 
     CameraConfigDialog dialog(currentTarget_, controlPort_, currentFiles, currentCamIds, injectOnly_,
-                               qcxBypass_, this);
+                               qcxBypass_, blfPath_, blfInterface_, this);
     if (dialog.exec() != QDialog::Accepted) {
         return;
     }
@@ -282,6 +317,8 @@ void MainWindow::onConfigureTriggered() {
     controlPort_ = dialog.controlPort();
     injectOnly_ = dialog.injectOnly();
     qcxBypass_ = dialog.qcxBypass();
+    blfPath_ = dialog.blfPath();
+    blfInterface_ = dialog.blfInterface();
     QStringList files = dialog.videoFiles();
     std::vector<int> camIds = dialog.camIds();
 

@@ -17,8 +17,9 @@ class QWidget;
 namespace camsyringe::ui {
 
 // Modal dialog for the "Configure" menu action: target, control port,
-// number of cameras (1-4), each camera's video file + QCarCam id, and the
-// two session-wide target-side flags (--inject-only, --qcx-bypass) --
+// number of cameras (1-4), each camera's video file + QCarCam id, the two
+// session-wide target-side flags (--inject-only, --qcx-bypass), and
+// (Phase 3) an optional BLF/Ethernet replay (file + network interface) --
 // deliberately the single place for all session settings, so a future
 // setting gets a new field here rather than another menu action. Only
 // reachable while MainWindow is in its Idle state.
@@ -28,11 +29,13 @@ class CameraConfigDialog : public QDialog {
 public:
     // camIds: parallel to initialFiles (same length or shorter -- missing
     // entries default to a distinct id, see .cpp). controlPort/injectOnly/
-    // qcxBypass: the target-side control-channel session settings from
-    // the PREVIOUS session, so re-opening Configure doesn't reset them.
+    // qcxBypass/blf*: the previous session's settings, so re-opening
+    // Configure doesn't reset them. initialBlfPath empty means BLF replay
+    // starts unchecked.
     explicit CameraConfigDialog(const QString& initialTarget, int initialControlPort,
                                  const QStringList& initialFiles, const std::vector<int>& initialCamIds,
                                  bool initialInjectOnly, bool initialQcxBypass,
+                                 const QString& initialBlfPath, const QString& initialBlfInterface,
                                  QWidget* parent = nullptr);
 
     QString target() const;
@@ -41,10 +44,16 @@ public:
     std::vector<int> camIds() const; // exactly count() entries, in order, parallel to videoFiles()
     bool injectOnly() const;
     bool qcxBypass() const;
+    // Empty blfPath() means BLF/Ethernet replay is disabled for this
+    // session -- MainWindow checks that, not a separate "enabled" flag.
+    QString blfPath() const;
+    QString blfInterface() const;
 
 private slots:
     void onCountChanged(int count);
     void onBrowseClicked(int row);
+    void onBlfBrowseClicked();
+    void onBlfEnabledChanged(int state);
     void onAccept();
 
 private:
@@ -63,6 +72,12 @@ private:
         QSpinBox* camIdSpin = nullptr;
     };
     Row rows_[camsyringe::kMaxCameras];
+
+    QCheckBox* blfEnabledCheck_ = nullptr;
+    QWidget* blfRowContainer_ = nullptr;
+    QLineEdit* blfPathEdit_ = nullptr;
+    QPushButton* blfBrowseButton_ = nullptr;
+    QLineEdit* blfInterfaceEdit_ = nullptr;
 };
 
 } // namespace camsyringe::ui

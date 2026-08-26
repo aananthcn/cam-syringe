@@ -38,7 +38,7 @@ It is the PC-side companion to an existing project called `qcarcam-injector` run
 - Three menu-bar actions, and a three-state playback model (`Idle` / `Playing` / `Paused`) — not just a running/not-running bool, because Configure's enabled state depends on distinguishing Paused from Idle:
   - **`▶ Play` / `⏸ Pause`** (toggle, existing): `Idle → Playing` starts all cameras; `Playing → Paused` stops them but leaves each tile's last frame visible (`Paused → Playing` restarts them — **there is no true pause/resume in `CameraStream`/`StreamPool`, "resuming" is actually starting fresh from the beginning of each file**, not resuming playback position; this is a known, accepted limitation, not a bug).
   - **`⏹ Stop`** (new): from `Playing` or `Paused`, fully stops all cameras, resets every tile back to its idle placeholder (unlike Pause, which keeps the last frame), and returns to `Idle`. This is the only action that unlocks Configure.
-  - **`⚙ Configure`** (new): opens a single dialog for all session settings — target, control port, number of cameras (1-4), each camera's video file + QCarCam id, and the two session-wide target-side flags (`--inject-only`, `--qcx-bypass`). **Deliberately one dialog for everything, not one action per setting** — a separate quick "change just the target" action existed briefly and was removed in favor of this, specifically so future settings get a new field in this same dialog rather than another menu action. **Enabled only in `Idle` state — greyed out and non-interactive during both `Playing` and `Paused`.** Applying it replaces the camera list (and rebuilds the tile grid) for the next Play. Note: called "target" everywhere (CLI flag, internal naming, dialog field) — "host" was explicitly rejected as the wrong word for this project's domain (it's a HIL replay *target* board, not a generic network host).
+  - **`⚙ Configure`** (new): opens a single dialog for all session settings — target, control port, number of cameras (1-4), each camera's video file + QCarCam id, the two session-wide target-side flags (`--inject-only`, `--qcx-bypass`), and (Phase 3) an optional BLF file + network interface for Ethernet replay, gated by its own "Replay BLF Ethernet capture" checkbox (session-wide, not per-camera — one BLF file, one interface, independent of camera count). **Deliberately one dialog for everything, not one action per setting** — a separate quick "change just the target" action existed briefly and was removed in favor of this, specifically so future settings get a new field in this same dialog rather than another menu action. **Enabled only in `Idle` state — greyed out and non-interactive during both `Playing` and `Paused`.** Applying it replaces the camera list (and rebuilds the tile grid) for the next Play. Note: called "target" everywhere (CLI flag, internal naming, dialog field) — "host" was explicitly rejected as the wrong word for this project's domain (it's a HIL replay *target* board, not a generic network host).
 - CLI arguments are now all optional: `camsyringe [--target [user@]<target>] [--control-port N] [--cam-ids IDS] [--inject-only] [--qcx-bypass] [--playall] [<video1> [<video2> [<video3> [<video4>]]]]`.
   - No arguments at all → launches with an empty camera list and immediately opens the Configure dialog so the user can set everything up from the UI, instead of showing an unexplained empty window.
   - `--target` defaults to `192.168.1.1` (the project's standard target address) when omitted — still editable via Configure before pressing Play.
@@ -123,6 +123,14 @@ Found while bringing up Phase 1 against the real `qcarcam-injector` target (a QN
 
 - **Never send synthetic mouse/keyboard input (e.g. via `python-xlib`/XTest, `xdotool`) to `DISPLAY=:1` on this machine to test the UI — it's the user's live, actively-used desktop session, not an isolated test display.** Confirmed the hard way during Phase 2 UI verification: a screenshot mid-test showed the user's own Firefox/other windows in front, meaning synthetic clicks had been landing on whatever was frontmost, not necessarily CamSyringe. Screenshots for passive visual verification (`import -window root`) are fine; synthetic input is not. If GUI interaction needs testing, ask the user to click it themselves, or use a separate isolated display (e.g. `Xvfb`) instead.
 
+- **`vector_blf`'s own `CMakeLists.txt` (`src/Vector/BLF/CMakeLists.txt`) uses `CMAKE_SOURCE_DIR`/`CMAKE_BINARY_DIR` instead of `CMAKE_CURRENT_SOURCE_DIR`/`CMAKE_CURRENT_BINARY_DIR` to find its own headers and its own generated `config.h` — a library not designed to be `add_subdirectory()`'d, since those two variables always resolve to the OUTERMOST project's root regardless of nesting.** Confirmed for real: without a fix, the very first source file fails with `Vector/BLF/A429BusStatistic.h: No such file or directory` (it was searching camsyringe's own `src/`), and after fixing that, `Vector/BLF/config.h: No such file or directory` (same bug, for the generated header). **Fixed WITHOUT patching the vendored submodule**: two plain (directory-scoped, old-style) `include_directories()` calls in our own top-level `CMakeLists.txt`, placed BEFORE `add_subdirectory(third_party/vector_blf)` — one for `third_party/vector_blf/src` (their real header location), one for `${CMAKE_CURRENT_BINARY_DIR}/third_party/vector_blf/src` (where their `configure_file(config.h.in config.h)` actually lands, since THAT part correctly uses `CMAKE_CURRENT_BINARY_DIR`). This works because directory-scoped `include_directories()` calls accumulate (don't replace) and are inherited by `add_subdirectory()`'d children — their own wrong path is still added too, just harmlessly unused alongside the correct one. If `vector_blf` is ever upgraded (submodule bump) and this starts failing again, check this workaround still applies before assuming something else broke.
+
+- **`Vector::BLF::ObjectType` (the enum `BlfLoader.cpp` switches on: `ETHERNET_FRAME`, `ETHERNET_FRAME_EX`, etc.) is declared at NAMESPACE scope (`Vector::BLF::ObjectType`), not nested inside `ObjectHeaderBase` despite `ObjectHeaderBase::objectType` being the field that holds it** — `Vector::BLF::ObjectHeaderBase::ObjectType::ETHERNET_FRAME` doesn't compile ("has not been declared"), it's `Vector::BLF::ObjectType::ETHERNET_FRAME`. `ObjectHeader::ObjectFlags` (the `TimeTenMics`/`TimeOneNans` timestamp-unit flags), by contrast, genuinely IS nested inside `ObjectHeader` — the two enums don't follow the same scoping convention, easy to guess wrong on the first one by analogy with the second.
+
+- **BLF replay (`BlfReplayer`) was validated end-to-end against real BLF fixture files (`third_party/vector_blf`'s own unit-test `.blf` files) with an independent capture, not just "it ran without crashing."** `BlfLoader`'s reconstructed raw-frame bytes were checked against `vector_blf`'s own unit test assertions (`tests/unittests/test_EthernetFrame.cpp`) byte-for-byte — destination MAC, source MAC, 802.1Q VLAN tag (`tpid`/`tci`), EtherType, and payload all matched exactly, for both the legacy `ETHERNET_FRAME` object type (header fields stored separately, reconstructed by hand) and the newer `ETHERNET_FRAME_EX` type (`frameData` already IS the complete frame, no reconstruction needed). Sent for real via a raw `AF_PACKET` `SOCK_RAW` socket on a real interface (`enp6s0`) and independently captured with `tcpdump` (needs its own `cap_net_raw` capability, same as the binary sending) — the captured wire bytes matched exactly. **Not yet validated**: real inter-frame pacing timing (the specific fixture used has both its frames at the identical timestamp, so `sleepUntilDeadline()`'s actual delay behavior across genuinely time-separated frames hasn't been exercised against a real multi-timestamp capture yet) — worth a dedicated timing test with a longer/real capture before trusting replay timing accuracy on faith.
+
+- **Raw `AF_PACKET` `SOCK_RAW` sockets need `CAP_NET_RAW` — plain user privileges aren't enough, and `sudo` needs an interactive terminal Claude Code doesn't have in this environment.** The working pattern: `sudo setcap cap_net_raw+ep <binary>` once (the user runs this themselves via Claude Code's `! <command>` passthrough, since Claude can't supply an interactive sudo password) — after that, the binary can open raw sockets without running as root at all, standard practice for this class of tool (`tcpdump`/Wireshark's `dumpcap` do the same). Needed on `camsyringe` itself for real BLF replay, and separately on `tcpdump` if independently verifying what got sent.
+
 ## Directory structure
 
 ```
@@ -130,26 +138,43 @@ camsyringe/
 ├── CMakeLists.txt
 ├── vcpkg.json                  # deps: ffmpeg[x264] (system pkg-config used for the actual
 │                                # build today, not vcpkg -- see "Known gotchas")
+├── third_party/
+│   └── vector_blf/              # DONE -- git submodule, GPLv3, github.com/Technica-Engineering/
+│                                  # vector_blf (the tobylorenz/Tobi1kenobi names elsewhere in
+│                                  # this doc are stale, that repo moved) -- see "Known gotchas"
+│                                  # for the CMAKE_SOURCE_DIR build workaround this needs
 ├── src/
 │   ├── main.cpp                 # argv parsing -> StreamPool -> MainWindow -> app.exec()
 │   ├── util/
 │   │   └── Clock.h               # DONE -- shared monotonicNowNs(), header-only
 │   ├── orchestrator/
 │   │   ├── Timeline.h/.cpp       # DONE -- shared CLOCK_MONOTONIC origin for all cameras
+│   │   │                          # AND (Phase 3) the BLF replayer, via
+│   │   │                          # StreamPool::timelineOriginNs()
 │   │   └── Config.h/.cpp         # NOT BUILT -- JSON config (camera files, IPs, BLF path),
-│   │                              # deferred until BLF integration needs multi-field config;
+│   │                              # deferred until multi-field config is actually needed;
 │   │                              # StreamPool::addCamera(CameraConfig) is the seam for it
 │   ├── camera/
 │   │   ├── CameraStream.h/.cpp   # DONE -- one decode/scale/encode/mux pipeline per camera
-│   │   └── StreamPool.h/.cpp     # DONE -- owns N CameraStream + N std::thread, Qt-free
-│   ├── blf/                      # NOT BUILT -- deferred phase, see Phased delivery
-│   │   ├── BlfLoader.h/.cpp      # BLF → priority_queue
-│   │   └── BlfReplayer.h/.cpp    # RT thread + raw socket injection
+│   │   ├── StreamPool.h/.cpp     # DONE -- owns N CameraStream + N std::thread, Qt-free
+│   │   └── PortScheme.h          # DONE -- shared port-assignment constants
+│   ├── net/
+│   │   └── DispatcherClient.h/.cpp  # DONE -- control-channel client, see "Target-side
+│   │                                  # coordination" above
+│   ├── blf/                      # DONE (Phase 3, raw Ethernet replay only -- CAN/LIN/etc
+│   │                              # decoding, e.g. for a future signal-monitor panel, is
+│   │                              # NOT built, see "Phased delivery")
+│   │   ├── BlfLoader.h/.cpp      # BLF -> sorted std::vector<BlfEthernetFrame> (fully
+│   │   │                          # pre-loaded, not literally a priority_queue -- see its
+│   │   │                          # own header comment for why that's equivalent here)
+│   │   └── BlfReplayer.h/.cpp    # RT thread + raw AF_PACKET socket injection, verbatim replay
 │   ├── correlation/              # NOT BUILT -- deferred phase
 │   │   └── SignalBridge.h/.cpp   # steering angle → camera speed
 │   └── ui/
 │       ├── MainWindow.h/.cpp     # DONE -- camera grid, menu-bar Play/Pause (see UI requirements)
-│       └── CameraWidget.h/.cpp   # DONE -- one tile: title + live frame + status/error
+│       ├── CameraWidget.h/.cpp   # DONE -- one tile: title + live frame + status/error
+│       └── CameraConfigDialog.h/.cpp  # DONE -- the single "Configure" dialog (target, cameras,
+│                                        # QCarCam ids, BLF file, everything)
 └── .github/workflows/            # NOT BUILT
     ├── build-linux.yml
     └── build-windows.yml
@@ -161,7 +186,7 @@ camsyringe/
 |---|---|---|
 | 1 | Single camera · FFmpeg transcode → RTP-MPEG-TS · `clock_nanosleep` timing loop | **Done**, validated on real target hardware |
 | 2 | Multi-camera `StreamPool` · Qt6 live preview grid · menu-bar Play/Pause · shared `Timeline` clock | **Done**, validated locally (see "Known gotchas") |
-| 3 | BLF pre-load + RT replayer · raw Ethernet (`AF_PACKET`) socket injection · BLF signal monitor panel | Not started |
+| 3 | BLF pre-load + RT replayer · raw Ethernet (`AF_PACKET`) socket injection · BLF signal monitor panel | Ethernet-frame replay **done**, verified end-to-end (see "Known gotchas"); signal monitor panel (CAN/LIN decoding) not started |
 | 4 | Correlation engine · USS sensor data · PDC overlay · steering-angle-driven camera speed | Not started |
 
 **Note on reordering**: the original roadmap put BLF/raw-socket work right after single-camera Phase 1. It was swapped for multi-camera StreamPool + Qt6 UI instead, because the real target's physical display can only show one camera at a time (each `qcarcam_receiver`/camera id needs its own `run_qcarcam.sh <id>` process) — there was no way to visually confirm multiple simultaneous camera streams without a local preview. BLF/raw-socket injection (originally "Phase 2") is now Phase 3.

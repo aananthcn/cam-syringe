@@ -83,6 +83,15 @@ public:
     size_t cameraCount() const { return cameras_.size(); }
     const CameraConfig& configAt(size_t i) const { return cameras_.at(i).config; }
 
+    // The CLOCK_MONOTONIC origin startAll() just captured -- callers with
+    // their own separately-paced real-time thread (e.g. BlfReplayer) that
+    // needs to stay phase-aligned with these cameras call this right after
+    // startAll() and feed it into their own setStartOrigin(), matching
+    // CONTEXT.md's Architecture diagram (one shared Timeline orchestrator
+    // feeding both the camera streamer and the BLF/ETH replayer). Only
+    // meaningful after startAll() has been called at least once.
+    int64_t timelineOriginNs() const { return timeline_.originNs(); }
+
 private:
     struct Entry {
         CameraConfig config;
