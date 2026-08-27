@@ -123,17 +123,30 @@ id) shows an error banner on just that camera's tile, not a crash.
 ## Windows
 
 CamSyringe isn't a native Windows app (BLF/Ethernet replay needs a raw
-Linux socket family with no Windows equivalent) — see
-`release/windows/README.md` for running it on Windows via WSL2 instead.
+Linux socket family with no Windows equivalent). Instead, it runs the
+same Linux bundle above inside WSL2 (WSLg handles the GUI window), and
+`create-windows-bundle.sh` wraps that bundle plus a Windows installer/
+launcher into one `.zip` a teammate downloads and double-clicks:
+
+```bash
+./create-cam-syringe-bundle.sh 0.5   # Linux bundle, as above
+./create-windows-bundle.sh 0.5       # wraps it for Windows
+```
+
+See `release/windows/README.md` for the full picture, including the
+**untested on real Windows hardware** caveat.
 
 ## Files here
 
 ```
 release/
-  create-cam-syringe-bundle.sh   the packaging script (see its own header
-                                  comment for the full runtime-dependency
-                                  reasoning)
+  create-cam-syringe-bundle.sh   the Linux packaging script (see its own
+                                  header comment for the full runtime-
+                                  dependency reasoning)
+  create-windows-bundle.sh       wraps a Linux bundle + windows/ into one
+                                  .zip for Windows teammates
   README.md                      this file
-  windows/                       WSL2-based Windows setup (see its own README.md)
+  windows/                       Windows installer/launcher sources (see
+                                  its own README.md)
   artifacts/                     gitignored -- where built bundles land
 ```

@@ -29,10 +29,14 @@
     surprises the first time it's tried on an actual machine.
 
     What this script does, in order:
-      1. Checks WSL2 itself is installed/enabled. If not, and running
-         elevated, installs it (Windows may require a REBOOT after this
-         -- the script exits and asks you to re-run it after that).
-         Requires Administrator; Windows enforces this, not this script.
+      1. Checks WSL2 itself is installed/enabled. If not, self-elevates
+         via UAC (Windows requires Administrator for this step, not this
+         script) and installs it (Windows may require a REBOOT after
+         this -- the script exits and asks you to re-run it after that).
+         If this account has no path to Administrator at all -- no
+         admin credentials to satisfy the UAC prompt, or the prompt/
+         feature is blocked outright by Group Policy -- prints a banner
+         telling you to raise an IT ticket instead of failing raw.
       2. Checks for the target WSL distro (default Ubuntu-22.04),
          installs it if missing (first run of a fresh distro needs you
          to set a Linux username/password interactively -- the script
@@ -50,17 +54,21 @@
          22H2 or later; on anything older this step is skipped with a
          warning (BLF replay won't reach the real LAN there, camera
          streaming still will).
-      4. Copies the given camsyringe_bundle_vX.Y.bin (built on Linux via
-         this project's own release/create-cam-syringe-bundle.sh --
-         nothing Windows-specific about the bundle file itself) into the
-         distro and runs its installer there, same as on native Linux.
+      4. Copies camsyringe_bundle_vX.Y.bin (built on Linux via this
+         project's own release/create-cam-syringe-bundle.sh -- nothing
+         Windows-specific about the bundle file itself) into the distro
+         and runs its installer there, same as on native Linux.
       5. Creates a Start Menu shortcut (backed by a launcher script under
          %LOCALAPPDATA%\CamSyringe\) that runs camsyringe inside WSL2 via
          `wsl.exe`, relying on WSLg for the Qt window to actually appear
          on the Windows desktop.
 
 .PARAMETER BundlePath
-    Path to camsyringe_bundle_vX.Y.bin (built on Linux). Required.
+    Path to camsyringe_bundle_vX.Y.bin (built on Linux). Optional --
+    if omitted, auto-detects a single camsyringe_bundle_v*.bin sitting
+    next to this script (that's how release/create-windows-bundle.sh
+    packages the two together into one .zip, so double-clicking
+    install-camsyringe.cmd needs no arguments at all).
 
 .PARAMETER DistroName
     WSL distro to install into. Default: Ubuntu-22.04.
@@ -75,18 +83,28 @@
     containing a space would word-split and break.
 
 .EXAMPLE
+    .\setup-camsyringe-wsl.ps1
+    (auto-detects camsyringe_bundle_v*.bin next to this script)
+
+.EXAMPLE
     .\setup-camsyringe-wsl.ps1 -BundlePath .\camsyringe_bundle_v0.5.bin
 
 .NOTES
-    Run from an elevated ("Run as Administrator") PowerShell prompt the
-    first time -- WSL feature enablement (step 1) needs it. Re-running
-    after WSL/the distro is already set up does not need elevation.
+    Does NOT need to be run elevated. Step 1 (WSL feature enablement)
+    needs Administrator, but only if WSL2 isn't already installed -- when
+    that's the case, this script self-elevates itself (a UAC prompt) via
+    Start-Process -Verb RunAs rather than requiring you to open an
+    elevated prompt yourself. If this account has no path to
+    Administrator at all (typical on a locked-down corporate machine, and
+    the reason this isn't just a hard requirement), it prints a banner
+    telling you to raise an IT ticket instead of failing with a raw
+    error. Once WSL2 itself is installed, nothing else this script does
+    needs elevation.
 #>
 
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)]
-    [string]$BundlePath,
+    [string]$BundlePath = "",
 
     [string]$DistroName = "Ubuntu-22.04",
 
@@ -99,6 +117,56 @@ function Test-IsAdmin {
     $id = [Security.Principal.WindowsIdentity]::GetCurrent()
     $p = New-Object Security.Principal.WindowsPrincipal($id)
     return $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+# On a locked-down corporate machine, the signed-in Windows account
+# frequently has no path to Administrator at all -- no local admin
+# credentials to satisfy a UAC prompt, and/or the WSL2/Hyper-V Windows
+# features are disabled outright by Group Policy, even for an admin who
+# does elevate. Both are IT's call to fix, not something to leave the
+# tester debugging from a raw PowerShell exception, so both paths below
+# print this instead and stop cleanly.
+function Show-ItTicketBanner {
+    param([string]$Reason)
+    Write-Host ""
+    Write-Host "=================================================================" -ForegroundColor Yellow
+    Write-Host "  CamSyringe needs WSL2 on this PC, and this account can't" -ForegroundColor Yellow
+    Write-Host "  install/enable it here." -ForegroundColor Yellow
+    Write-Host "=================================================================" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  $Reason"
+    Write-Host ""
+    Write-Host "  Raise an IT ticket asking for:"
+    Write-Host "    - WSL2 installed/enabled on this machine (the 'Windows"
+    Write-Host "      Subsystem for Linux' and 'Virtual Machine Platform'"
+    Write-Host "      Windows features -- equivalent to running 'wsl --install'"
+    Write-Host "      once as Administrator)."
+    Write-Host "    - Windows 11 22H2+, if BLF/Ethernet replay is needed"
+    Write-Host "      (older Windows can't use the WSL2 'mirrored' networking"
+    Write-Host "      mode replay depends on -- camera streaming works either"
+    Write-Host "      way)."
+    Write-Host ""
+    Write-Host "  Once IT confirms WSL2 is installed, re-run this installer"
+    Write-Host "  (install-camsyringe.cmd) -- no admin rights are needed after"
+    Write-Host "  that one-time step."
+    Write-Host "=================================================================" -ForegroundColor Yellow
+    Write-Host ""
+}
+
+if ([string]::IsNullOrWhiteSpace($BundlePath)) {
+    # No -BundlePath given -- look for the one this script ships
+    # alongside in release/create-windows-bundle.sh's .zip layout.
+    $candidates = @(Get-ChildItem -Path $PSScriptRoot -Filter "camsyringe_bundle_v*.bin" -File -ErrorAction SilentlyContinue)
+    if ($candidates.Count -eq 1) {
+        $BundlePath = $candidates[0].FullName
+        Write-Host "Using bundle: $BundlePath"
+    } elseif ($candidates.Count -gt 1) {
+        Write-Error "Multiple camsyringe_bundle_v*.bin files found next to this script -- pass -BundlePath to pick one: $($candidates.Name -join ', ')"
+        exit 1
+    } else {
+        Write-Error "No camsyringe_bundle_v*.bin found next to this script, and -BundlePath wasn't given. Expected it alongside this script (see release/create-windows-bundle.sh)."
+        exit 1
+    }
 }
 
 if (-not (Test-Path $BundlePath)) {
@@ -118,11 +186,38 @@ try {
 
 if (-not $wslInstalled) {
     if (-not (Test-IsAdmin)) {
-        Write-Error "WSL2 isn't installed/enabled yet, and enabling it needs Administrator. Re-run this script from an elevated ('Run as Administrator') PowerShell prompt."
-        exit 1
+        # Don't just error out -- try to self-elevate (re-launch this
+        # exact script, same arguments, in a new elevated PowerShell). On
+        # a normal dev machine this is a one-click UAC "Yes". On a
+        # corporate machine with no admin path at all, Start-Process
+        # throws (user has no credentials to satisfy the prompt, or the
+        # prompt itself is policy-blocked) -- that's the actual "can't
+        # install" signal the IT-ticket banner is for.
+        Write-Host "WSL2 isn't installed/enabled yet -- that needs a one-time Administrator step. Requesting elevation..."
+        $elevated = $false
+        try {
+            $selfArgs = "-NoProfile -ExecutionPolicy Bypass -NoExit -File `"$PSCommandPath`" -BundlePath `"$BundlePath`" -DistroName `"$DistroName`" -InstallDirInWsl `"$InstallDirInWsl`""
+            Start-Process -FilePath "powershell.exe" -ArgumentList $selfArgs -Verb RunAs -Wait
+            $elevated = $true
+        } catch {
+            $elevated = $false
+        }
+        if (-not $elevated) {
+            Show-ItTicketBanner "This Windows account doesn't have -- and couldn't obtain -- the Administrator rights WSL2's one-time setup needs. That's expected on a locked-down corporate machine."
+            exit 1
+        }
+        Write-Host ""
+        Write-Host "The elevated window that just ran (and that you closed) handled the one-time WSL2 setup step."
+        Write-Host "Re-run this installer (or double-click install-camsyringe.cmd again) to continue."
+        exit 0
     }
+
     Write-Host "Enabling WSL2 (this may require a reboot)..."
     wsl --install --no-distribution
+    if ($LASTEXITCODE -ne 0) {
+        Show-ItTicketBanner "'wsl --install' failed (exit code $LASTEXITCODE) even with Administrator rights -- likely a corporate Group Policy blocking the underlying Hyper-V/Virtual Machine Platform Windows features."
+        exit 1
+    }
     Write-Warning "WSL2 was just enabled. If Windows asked you to reboot, do that now, then re-run this script (same command) to continue."
     exit 0
 }
@@ -138,6 +233,10 @@ try {
 if ($existingDistros -notcontains $DistroName) {
     Write-Host "Installing $DistroName (this opens a console window for first-time Linux user/password setup)..."
     wsl --install -d $DistroName
+    if ($LASTEXITCODE -ne 0) {
+        Show-ItTicketBanner "'wsl --install -d $DistroName' failed (exit code $LASTEXITCODE) -- likely blocked network/Microsoft Store access needed to fetch the Linux distro image, common on a locked-down corporate network."
+        exit 1
+    }
     Write-Warning "Finish setting up your Linux username/password in the window that just opened, then re-run this script (same command) to continue."
     exit 0
 }
