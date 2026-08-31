@@ -254,12 +254,71 @@ cat > "$STAGE/run-camsyringe.sh" <<'RUNNER_EOF'
 # real binary with every argument forwarded. No package-manager check --
 # see release/create-cam-syringe-bundle.sh's own header comment for why
 # this bundle needs nothing else installed.
+#
+# QT_QPA_PLATFORM is pinned to "xcb" -- the only platform plugin this
+# bundle ships (see the dependency-closure reasoning in
+# create-cam-syringe-bundle.sh's own header comment). Without this, Qt's
+# platform autodetection picks "wayland" whenever WAYLAND_DISPLAY is set
+# alongside DISPLAY -- true on any Wayland session, and always true under
+# WSLg (release/windows/), which runs its own Wayland compositor plus
+# XWayland and exports both variables. Qt then fails outright with
+# "Could not find the Qt platform plugin 'wayland'" since only xcb is
+# bundled, even though XWayland is right there and would have worked.
+#
+# Two extra checks below, both no-ops on a normal Linux desktop:
+#   - Under WSL (detected via /proc/version), bail out with an actionable
+#     message BEFORE launching if neither DISPLAY nor WAYLAND_DISPLAY is
+#     set -- that means WSLg isn't active in this shell, camsyringe's
+#     window has nowhere to go, and it would otherwise just hang or exit
+#     with no visible output at all (exactly the "nothing happened"
+#     failure mode this is here to prevent).
+#   - If camsyringe exits non-zero for any reason, automatically re-run
+#     it once with QT_DEBUG_PLUGINS=1 and show the tail of that output --
+#     Qt's own platform-plugin-loading log, which pinpoints *why* no
+#     window appeared far better than a silent failure would.
 set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 export LD_LIBRARY_PATH="$SCRIPT_DIR/lib:${LD_LIBRARY_PATH:-}"
 export QT_QPA_PLATFORM_PLUGIN_PATH="$SCRIPT_DIR/plugins/platforms"
-exec "$SCRIPT_DIR/bin/camsyringe" "$@"
+export QT_QPA_PLATFORM="xcb"
+
+if grep -qi microsoft /proc/version 2>/dev/null; then
+    if [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
+        cat >&2 <<'EOF'
+=================================================================
+  WSLg doesn't look active in this shell -- both DISPLAY and
+  WAYLAND_DISPLAY are unset. camsyringe's window has nowhere to
+  display; it would hang or exit with no visible output.
+
+  Try, in order:
+    1. Close this WSL terminal and open a new one (WSLg sets these
+       per-session; a stale/old session can be missing them).
+    2. From Windows: wsl --shutdown, then reopen a WSL terminal.
+    3. Confirm WSLg itself works, independent of camsyringe:
+         sudo apt install -y x11-apps && xeyes
+       If xeyes ALSO shows nothing, it's a WSLg/Windows problem,
+       not camsyringe -- see release/windows/README.md.
+=================================================================
+EOF
+        exit 1
+    fi
+fi
+
+set +e
+"$SCRIPT_DIR/bin/camsyringe" "$@"
+STATUS=$?
+set -e
+
+if [ $STATUS -ne 0 ]; then
+    echo "" >&2
+    echo "camsyringe exited with status $STATUS. Re-running once with" >&2
+    echo "QT_DEBUG_PLUGINS=1 to show why no window appeared:" >&2
+    echo "" >&2
+    QT_DEBUG_PLUGINS=1 "$SCRIPT_DIR/bin/camsyringe" "$@" 2>&1 | tail -n 40 >&2
+fi
+
+exit $STATUS
 RUNNER_EOF
 chmod +x "$STAGE/run-camsyringe.sh"
 

@@ -155,16 +155,29 @@ function Show-ItTicketBanner {
 
 if ([string]::IsNullOrWhiteSpace($BundlePath)) {
     # No -BundlePath given -- look for the one this script ships
-    # alongside in release/create-windows-bundle.sh's .zip layout.
-    $candidates = @(Get-ChildItem -Path $PSScriptRoot -Filter "camsyringe_bundle_v*.bin" -File -ErrorAction SilentlyContinue)
+    # alongside in release/create-windows-bundle.sh's .zip layout. Also
+    # check ../artifacts (sibling to a "windows" folder) as a fallback --
+    # that's this PROJECT'S OWN raw source-tree layout (release/windows/
+    # + release/artifacts/ as separate folders), which is a mistake to
+    # hand a teammate (they should get create-windows-bundle.sh's single
+    # flat .zip instead) but has actually shown up in practice, so it's
+    # worth recovering from rather than just failing.
+    $searchDirs = @($PSScriptRoot)
+    $siblingArtifacts = Join-Path (Split-Path $PSScriptRoot -Parent) "artifacts"
+    if (Test-Path $siblingArtifacts) { $searchDirs += $siblingArtifacts }
+
+    $candidates = @(Get-ChildItem -Path $searchDirs -Filter "camsyringe_bundle_v*.bin" -File -ErrorAction SilentlyContinue)
     if ($candidates.Count -eq 1) {
         $BundlePath = $candidates[0].FullName
         Write-Host "Using bundle: $BundlePath"
+        if ($candidates[0].DirectoryName -ne $PSScriptRoot) {
+            Write-Warning "That .bin wasn't next to this script -- it looks like you have this project's raw release/ folder (windows/ + artifacts/ as separate folders) rather than the single .zip create-windows-bundle.sh builds. Both work, but for a real handoff, use the .zip -- see release/README.md."
+        }
     } elseif ($candidates.Count -gt 1) {
-        Write-Error "Multiple camsyringe_bundle_v*.bin files found next to this script -- pass -BundlePath to pick one: $($candidates.Name -join ', ')"
+        Write-Error "Multiple camsyringe_bundle_v*.bin files found ($($searchDirs -join ', ')) -- pass -BundlePath to pick one: $($candidates.Name -join ', ')"
         exit 1
     } else {
-        Write-Error "No camsyringe_bundle_v*.bin found next to this script, and -BundlePath wasn't given. Expected it alongside this script (see release/create-windows-bundle.sh)."
+        Write-Error "No camsyringe_bundle_v*.bin found next to this script (or in ..\artifacts), and -BundlePath wasn't given. If you were handed this project's raw release/ folder rather than a single camsyringe_windows_bundle_vX.Y.zip, that's the mismatch -- ask for the .zip that release/create-windows-bundle.sh builds, or pass -BundlePath pointing at the .bin directly."
         exit 1
     }
 }

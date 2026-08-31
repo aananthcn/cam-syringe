@@ -62,6 +62,15 @@ Send that one `.zip` to the Windows machine any way you like (USB,
 network share, etc.) — it's gitignored, not committed to this repo, same
 as the Linux `.bin` it wraps.
 
+**Don't hand over a raw copy of this project's `release/` folder
+instead.** It looks similar (a `windows/` folder with the same three
+files, a sibling `artifacts/` with the `.bin`) but the `.bin` isn't next
+to the script the way it is inside the actual `.zip`, and
+`setup-camsyringe-wsl.ps1` will fail to find it — this has happened in
+practice. The script now falls back to checking `../artifacts` and warns
+if it had to, but the `.zip` from `create-windows-bundle.sh` is the only
+thing meant to be handed off.
+
 ## What the teammate does
 
 1. Extract the `.zip` anywhere.
@@ -135,6 +144,18 @@ network interfaces directly with the WSL2 guest instead, which is what
 BLF replay actually needs. `setup-camsyringe-wsl.ps1` configures this
 automatically; on a Windows version that doesn't support it, camera
 streaming still works, BLF replay won't.
+
+## Troubleshooting
+
+- **`qt.qpa.plugin: Could not find the Qt platform plugin "wayland"`** —
+  seen on a bundle built before `create-cam-syringe-bundle.sh` started
+  pinning `QT_QPA_PLATFORM=xcb` in `run-camsyringe.sh`. WSLg runs its own
+  Wayland compositor *and* XWayland, exporting both `WAYLAND_DISPLAY` and
+  `DISPLAY`; Qt's autodetection prefers `wayland` when both are set, but
+  this bundle only ships the `xcb` platform plugin, so it fails outright
+  instead of falling back to XWayland (which would have worked). Fix:
+  rebuild the bundle and re-run the installer, or in the meantime run
+  `QT_QPA_PLATFORM=xcb ~/camsyringe/run-camsyringe.sh` directly inside WSL.
 
 ## Manual setup (if the installer doesn't work as written)
 
