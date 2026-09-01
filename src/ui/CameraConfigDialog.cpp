@@ -47,7 +47,7 @@ void RememberBrowsedFile(const QString& file) {
 } // namespace
 
 CameraConfigDialog::CameraConfigDialog(const QString& initialTarget, int initialControlPort,
-                                        const QStringList& initialFiles,
+                                        const QString& initialSshUser, const QStringList& initialFiles,
                                         const std::vector<int>& initialCamIds, bool initialInjectOnly,
                                         bool initialQcxBypass, const QString& initialBlfPath,
                                         const QString& initialBlfInterface, QWidget* parent)
@@ -79,6 +79,14 @@ CameraConfigDialog::CameraConfigDialog(const QString& initialTarget, int initial
     controlPortSpin_->setRange(1, 65535);
     controlPortSpin_->setValue(initialControlPort);
     form->addRow(tr("Control port:"), controlPortSpin_);
+
+    // Everything CamSyringe does over SSH against `target` (install,
+    // Play-time dispatcher-start retry, Stop's target-process kill) uses
+    // this as the username to try passwordless first -- see
+    // MainWindow::sshUser_'s own comment. This is the one place to change
+    // it; the Install confirmation dialog only ever displays it.
+    sshUserEdit_ = new QLineEdit(initialSshUser.isEmpty() ? QStringLiteral("root") : initialSshUser, this);
+    form->addRow(tr("SSH user:"), sshUserEdit_);
 
     for (int i = 0; i < camsyringe::kMaxCameras; ++i) {
         rows_[i].container = new QWidget(this);
@@ -214,6 +222,10 @@ void CameraConfigDialog::onAccept() {
         QMessageBox::warning(this, tr("Missing target"), tr("Enter a target host."));
         return;
     }
+    if (sshUserEdit_->text().trimmed().isEmpty()) {
+        QMessageBox::warning(this, tr("Missing SSH user"), tr("Enter an SSH username (e.g. root)."));
+        return;
+    }
     std::set<int> seenIds;
     for (int i = 0; i < countSpin_->value(); ++i) {
         if (rows_[i].pathEdit->text().trimmed().isEmpty()) {
@@ -249,6 +261,8 @@ void CameraConfigDialog::onAccept() {
 QString CameraConfigDialog::target() const { return targetEdit_->text().trimmed(); }
 
 int CameraConfigDialog::controlPort() const { return controlPortSpin_->value(); }
+
+QString CameraConfigDialog::sshUser() const { return sshUserEdit_->text().trimmed(); }
 
 QStringList CameraConfigDialog::videoFiles() const {
     QStringList files;

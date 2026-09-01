@@ -13,6 +13,7 @@
 namespace {
 
 constexpr const char* kDefaultTarget = "192.168.1.1";
+constexpr const char* kDefaultSshUser = "root";
 constexpr int kDefaultControlPort = 5000;
 constexpr int kMinCamId = 1;
 constexpr int kMaxCamId = 16; // this target's allcamtest range, see qcarcam-injector/ARCHITECTURE.md
@@ -24,7 +25,9 @@ void printUsage(const char* prog) {
         "usage: %s [--target [user@]<target>] [--control-port N] [--cam-ids IDS] [--playall]\n"
         "       %*s[--inject-only] [--qcx-bypass] [--blf-file PATH] [--blf-interface IFACE]\n"
         "       %*s[<video1> [<video2> [<video3> [<video4>]]]]\n"
-        "  --target TARGET    target host (default: %s)\n"
+        "  --target [USER@]TARGET  target host (default: %s), optionally prefixed with the SSH\n"
+        "                     username CamSyringe uses for it (default: %s) -- also settable/\n"
+        "                     changeable later from Configure's own \"SSH user\" field.\n"
         "  --control-port N   qcarcam_dispatcher's control-channel port on the target\n"
         "                     (default: %d)\n"
         "  --cam-ids IDS      QCarCam id for each video file, comma-separated, in the same\n"
@@ -45,7 +48,7 @@ void printUsage(const char* prog) {
         "  With no arguments at all, opens the camera configuration dialog on launch.\n",
         prog, static_cast<int>(std::string("usage: ").size() + std::string(prog).size() + 1), "",
         static_cast<int>(std::string("usage: ").size() + std::string(prog).size() + 1), "",
-        kDefaultTarget, kDefaultControlPort, kMaxCamId, kDefaultBlfInterface);
+        kDefaultTarget, kDefaultSshUser, kDefaultControlPort, kMaxCamId, kDefaultBlfInterface);
 }
 
 // Comma-separated QCarCam ids, e.g. "8,9,1,2" -- a dash within one entry
@@ -197,8 +200,14 @@ int main(int argc, char** argv) {
     }
 
     std::string target = targetArg.empty() ? kDefaultTarget : targetArg;
+    std::string sshUser = kDefaultSshUser;
+    // `--target user@host` -- the "user@" part used to be silently
+    // discarded here (parsed by usage text, never actually used anywhere)
+    // until Configure gained its own SSH User field; now both feed the
+    // same MainWindow::sshUser_, so this CLI form and Configure agree.
     auto at = target.find('@');
     if (at != std::string::npos) {
+        sshUser = target.substr(0, at);
         target = target.substr(at + 1);
     }
 
@@ -217,8 +226,9 @@ int main(int argc, char** argv) {
         pool.addCamera(std::move(cfg));
     }
 
-    camsyringe::ui::MainWindow window(&pool, QString::fromStdString(target), controlPort, injectOnly,
-                                       qcxBypass, QString::fromStdString(blfFile),
+    camsyringe::ui::MainWindow window(&pool, QString::fromStdString(target), controlPort,
+                                       QString::fromStdString(sshUser), injectOnly, qcxBypass,
+                                       QString::fromStdString(blfFile),
                                        QString::fromStdString(blfInterface), playAll);
     window.resize(1280, 720);
     window.show();

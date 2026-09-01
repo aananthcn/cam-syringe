@@ -28,18 +28,24 @@ class CameraConfigDialog : public QDialog {
 
 public:
     // camIds: parallel to initialFiles (same length or shorter -- missing
-    // entries default to a distinct id, see .cpp). controlPort/injectOnly/
-    // qcxBypass/blf*: the previous session's settings, so re-opening
-    // Configure doesn't reset them. initialBlfPath empty means BLF replay
-    // starts unchecked.
+    // entries default to a distinct id, see .cpp). controlPort/sshUser/
+    // injectOnly/qcxBypass/blf*: the previous session's settings, so
+    // re-opening Configure doesn't reset them. initialBlfPath empty means
+    // BLF replay starts unchecked.
     explicit CameraConfigDialog(const QString& initialTarget, int initialControlPort,
-                                 const QStringList& initialFiles, const std::vector<int>& initialCamIds,
-                                 bool initialInjectOnly, bool initialQcxBypass,
-                                 const QString& initialBlfPath, const QString& initialBlfInterface,
-                                 QWidget* parent = nullptr);
+                                 const QString& initialSshUser, const QStringList& initialFiles,
+                                 const std::vector<int>& initialCamIds, bool initialInjectOnly,
+                                 bool initialQcxBypass, const QString& initialBlfPath,
+                                 const QString& initialBlfInterface, QWidget* parent = nullptr);
 
     QString target() const;
     int controlPort() const;
+    // SSH username MainWindow's sshSession_ authenticates as for this
+    // target (install, Play-time dispatcher-start retry, Stop's
+    // target-process kill) -- this field, not the Install dialog itself,
+    // is the one place to change it (see MainWindow::sshUser_'s own
+    // comment).
+    QString sshUser() const;
     QStringList videoFiles() const;  // exactly count() entries, in order
     std::vector<int> camIds() const; // exactly count() entries, in order, parallel to videoFiles()
     bool injectOnly() const;
@@ -61,6 +67,7 @@ private:
 
     QLineEdit* targetEdit_ = nullptr;
     QSpinBox* controlPortSpin_ = nullptr;
+    QLineEdit* sshUserEdit_ = nullptr;
     QSpinBox* countSpin_ = nullptr;
     QCheckBox* injectOnlyCheck_ = nullptr;
     QCheckBox* qcxBypassCheck_ = nullptr;
