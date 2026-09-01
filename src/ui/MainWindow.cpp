@@ -5,6 +5,7 @@
 #include "net/DispatcherRemoteControl.h"
 #include "net/DispatcherVersionProbe.h"
 #include "net/InjectorBundleInstaller.h"
+#include "net/TcpConnect.h"
 #include "ui/CameraConfigDialog.h"
 #include "ui/CameraWidget.h"
 #include "ui/SshCredentialsDialog.h"
@@ -46,14 +47,15 @@ QString portFromDestUrl(const std::string& destUrl) {
 } // namespace
 
 MainWindow::MainWindow(camsyringe::StreamPool* pool, QString initialTarget, int initialControlPort,
-                        QString initialSshUser, bool initialInjectOnly, bool initialQcxBypass,
-                        QString initialBlfPath, QString initialBlfInterface, bool startImmediately,
-                        QWidget* parent)
+                        QString initialSshUser, QString initialSshKeyPath, bool initialInjectOnly,
+                        bool initialQcxBypass, QString initialBlfPath, QString initialBlfInterface,
+                        bool startImmediately, QWidget* parent)
     : QMainWindow(parent),
       pool_(pool),
       currentTarget_(std::move(initialTarget)),
       controlPort_(initialControlPort),
       sshUser_(std::move(initialSshUser)),
+      sshKeyPath_(std::move(initialSshKeyPath)),
       injectOnly_(initialInjectOnly),
       qcxBypass_(initialQcxBypass),
       blfPath_(std::move(initialBlfPath)),
@@ -330,7 +332,8 @@ void MainWindow::tryStartDispatcherThenRetry() {
     QString target = currentTarget_;
     int controlPort = controlPort_;
     QString sshUser = sshUser_;
-    std::thread([this, target, controlPort, sshUser]() {
+    QString sshKeyPath = sshKeyPath_;
+    std::thread([this, target, controlPort, sshUser, sshKeyPath]() {
         auto credentialsCb = [this, sshUser](const QString& t, QString* username, QString* password) {
             bool accepted = false;
             QMetaObject::invokeMethod(
@@ -352,7 +355,7 @@ void MainWindow::tryStartDispatcherThenRetry() {
         // onDeclareComplete()'s second connectFailed (dispatcherStartAttempted_
         // now true) falls through to the ordinary error banner, same as
         // if this whole retry never existed.
-        if (sshSession_.ensureAuth(target, sshUser, credentialsCb)) {
+        if (sshSession_.ensureAuth(target, sshUser, sshKeyPath, credentialsCb)) {
             QString error;
             camsyringe::DispatcherRemoteControl::ensureRunning(sshSession_, target, controlPort,
                                                                 &error);
@@ -497,7 +500,8 @@ void MainWindow::onStopTriggered() {
 void MainWindow::killTargetProcesses() {
     QString target = currentTarget_;
     QString sshUser = sshUser_;
-    std::thread([this, target, sshUser]() {
+    QString sshKeyPath = sshKeyPath_;
+    std::thread([this, target, sshUser, sshKeyPath]() {
         auto credentialsCb = [this, sshUser](const QString& t, QString* username, QString* password) {
             bool accepted = false;
             QMetaObject::invokeMethod(
@@ -514,7 +518,7 @@ void MainWindow::killTargetProcesses() {
             return accepted;
         };
 
-        if (!sshSession_.ensureAuth(target, sshUser, credentialsCb)) {
+        if (!sshSession_.ensureAuth(target, sshUser, sshKeyPath, credentialsCb)) {
             return; // user cancelled the credentials prompt -- nothing more to do
         }
         QString error;
@@ -542,8 +546,8 @@ void MainWindow::onConfigureTriggered() {
         currentCamIds.push_back(pool_->configAt(i).camId);
     }
 
-    CameraConfigDialog dialog(currentTarget_, controlPort_, sshUser_, currentFiles, currentCamIds,
-                               injectOnly_, qcxBypass_, blfPath_, blfInterface_, this);
+    CameraConfigDialog dialog(currentTarget_, controlPort_, sshUser_, sshKeyPath_, currentFiles,
+                               currentCamIds, injectOnly_, qcxBypass_, blfPath_, blfInterface_, this);
     if (dialog.exec() != QDialog::Accepted) {
         return;
     }
@@ -552,6 +556,7 @@ void MainWindow::onConfigureTriggered() {
     installInjectorAction_->setEnabled(!currentTarget_.isEmpty());
     controlPort_ = dialog.controlPort();
     sshUser_ = dialog.sshUser();
+    sshKeyPath_ = dialog.sshKeyPath();
     injectOnly_ = dialog.injectOnly();
     qcxBypass_ = dialog.qcxBypass();
     blfPath_ = dialog.blfPath();
@@ -564,7 +569,9 @@ void MainWindow::onConfigureTriggered() {
         int port = camsyringe::kBasePort + i * camsyringe::kPortStep;
         CameraConfig cfg;
         cfg.inputPath = files[i].toStdString();
-        cfg.destUrl = ("rtp://" + currentTarget_ + ":" + QString::number(port)).toStdString();
+        cfg.destUrl = "rtp://" +
+                      camsyringe::bracketHostIfIPv6(currentTarget_.toStdString()) + ":" +
+                      std::to_string(port);
         cfg.label = ("cam" + QString::number(i)).toStdString();
         cfg.index = i;
         cfg.camId = camIds[static_cast<size_t>(i)];
@@ -603,7 +610,7 @@ void MainWindow::onInstallInjectorTriggered() {
 
 void MainWindow::runInjectorInstall(const QString& bundlePath, const QString& bundleVersion) {
     camsyringe::InjectorBundleInstaller::installAsync(
-        sshSession_, currentTarget_, controlPort_, sshUser_, bundlePath, bundleVersion,
+        sshSession_, currentTarget_, controlPort_, sshUser_, sshKeyPath_, bundlePath, bundleVersion,
         // Confirm -- called on the install's own background thread;
         // blocks it until the GUI thread's modal dialog is answered.
         // Shows exactly which file was picked (so the user isn't left
@@ -623,13 +630,16 @@ void MainWindow::runInjectorInstall(const QString& bundlePath, const QString& bu
                     // (the same place currentTarget_ itself comes from),
                     // not overriding it from here.
                     QString user = sshSession_.resolvedUser(target);
+                    QString keyPath = sshSession_.resolvedKeyPath(target);
+                    QString keyLine =
+                        keyPath.isEmpty() ? QString() : tr("Key: %1\n").arg(keyPath);
                     for (;;) {
                         QMessageBox box(QMessageBox::Question, tr("Install Injector Bundle"),
-                                         tr("Target: %1\nUser: %2\n\n"
+                                         tr("Target: %1\nUser: %2\n%3\n"
                                             "This will remove the existing injector install at "
-                                            "%1:/var/opt (bin/lib/include), install v%3, and "
-                                            "restart qcarcam_dispatcher.\n\nBundle file:\n%4")
-                                             .arg(target, user, *bundleVersion, *bundlePath),
+                                            "%1:/var/opt (bin/lib/include), install v%4, and "
+                                            "restart qcarcam_dispatcher.\n\nBundle file:\n%5")
+                                             .arg(target, user, keyLine, *bundleVersion, *bundlePath),
                                          QMessageBox::NoButton, this);
                         QPushButton* installBtn =
                             box.addButton(tr("Install"), QMessageBox::AcceptRole);

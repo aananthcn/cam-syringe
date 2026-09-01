@@ -114,7 +114,21 @@ cp "$WINDOWS_DIR/setup-camsyringe-wsl.ps1" "$STAGE/"
 # setup-camsyringe-wsl.ps1).
 INJECTOR_BUNDLES=("$SCRIPT_DIR"/artifacts/qcarcam_injector_bundle_v*.bin)
 if [[ -e "${INJECTOR_BUNDLES[0]}" ]]; then
-    cp "${INJECTOR_BUNDLES[@]}" "$STAGE/"
+    # Ship only the HIGHEST version found, not every leftover sitting in
+    # artifacts/ -- confirmed for real this matters: artifacts/ isn't
+    # cleaned between builds, so an older qcarcam_injector_bundle_vX.Y.bin
+    # from a previous release stays right where a newer one lands, and
+    # copying the whole glob (the original bug here) silently shipped
+    # BOTH in the same .zip. `sort -V` (version sort) orders "0.6" before
+    # "0.7" (and "0.10" after "0.9", unlike a plain lexical sort) --
+    # `tail -1` picks the newest.
+    if [[ ${#INJECTOR_BUNDLES[@]} -gt 1 ]]; then
+        LATEST_INJECTOR_BUNDLE="$(printf '%s\n' "${INJECTOR_BUNDLES[@]}" | sort -V | tail -1)"
+        echo "NOTE: ${#INJECTOR_BUNDLES[@]} qcarcam_injector_bundle_v*.bin found in $SCRIPT_DIR/artifacts -- shipping only the latest ($(basename "$LATEST_INJECTOR_BUNDLE")). Consider removing the older one(s) from that directory." >&2
+    else
+        LATEST_INJECTOR_BUNDLE="${INJECTOR_BUNDLES[0]}"
+    fi
+    cp "$LATEST_INJECTOR_BUNDLE" "$STAGE/"
 else
     echo "NOTE: no qcarcam_injector_bundle_v*.bin found in $SCRIPT_DIR/artifacts -- shipping without it (optional)." >&2
 fi

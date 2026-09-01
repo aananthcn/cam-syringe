@@ -1,5 +1,6 @@
 #include "camera/PortScheme.h"
 #include "camera/StreamPool.h"
+#include "net/TcpConnect.h"
 #include "ui/MainWindow.h"
 
 #include <QApplication>
@@ -22,14 +23,18 @@ constexpr const char* kDefaultBlfInterface = "enp6s0";
 void printUsage(const char* prog) {
     std::fprintf(
         stderr,
-        "usage: %s [--target [user@]<target>] [--control-port N] [--cam-ids IDS] [--playall]\n"
-        "       %*s[--inject-only] [--qcx-bypass] [--blf-file PATH] [--blf-interface IFACE]\n"
-        "       %*s[<video1> [<video2> [<video3> [<video4>]]]]\n"
+        "usage: %s [--target [user@]<target>] [--control-port N] [--ssh-key PATH] [--cam-ids IDS]\n"
+        "       %*s[--playall] [--inject-only] [--qcx-bypass] [--blf-file PATH]\n"
+        "       %*s[--blf-interface IFACE] [<video1> [<video2> [<video3> [<video4>]]]]\n"
         "  --target [USER@]TARGET  target host (default: %s), optionally prefixed with the SSH\n"
         "                     username CamSyringe uses for it (default: %s) -- also settable/\n"
         "                     changeable later from Configure's own \"SSH user\" field.\n"
         "  --control-port N   qcarcam_dispatcher's control-channel port on the target\n"
         "                     (default: %d)\n"
+        "  --ssh-key PATH     SSH private key (-i) to use for that same target, instead of\n"
+        "                     ssh's own default identity/agent -- also settable/changeable\n"
+        "                     later from Configure's own \"SSH key\" field. Omit for the\n"
+        "                     default (no explicit key).\n"
         "  --cam-ids IDS      QCarCam id for each video file, comma-separated, in the same\n"
         "                     order -- REQUIRED if any video files are given. A dash within\n"
         "                     one entry expands to an inclusive range (e.g. 1-3,8 means\n"
@@ -117,6 +122,7 @@ int main(int argc, char** argv) {
     bool playAll = false;
     bool injectOnly = false;
     bool qcxBypass = false;
+    std::string sshKeyPath;
     std::string blfFile;
     std::string blfInterface = kDefaultBlfInterface;
     std::vector<std::string> videoFiles;
@@ -149,6 +155,12 @@ int main(int argc, char** argv) {
             injectOnly = true;
         } else if (arg == "--qcx-bypass") {
             qcxBypass = true;
+        } else if (arg == "--ssh-key") {
+            if (i + 1 >= argc) {
+                printUsage(argv[0]);
+                return EXIT_FAILURE;
+            }
+            sshKeyPath = argv[++i];
         } else if (arg == "--blf-file") {
             if (i + 1 >= argc) {
                 printUsage(argv[0]);
@@ -218,7 +230,8 @@ int main(int argc, char** argv) {
         int port = camsyringe::kBasePort + static_cast<int>(i) * camsyringe::kPortStep;
         camsyringe::CameraConfig cfg;
         cfg.inputPath = videoFiles[i];
-        cfg.destUrl = "rtp://" + target + ":" + std::to_string(port);
+        cfg.destUrl =
+            "rtp://" + camsyringe::bracketHostIfIPv6(target) + ":" + std::to_string(port);
         cfg.label = "cam" + std::to_string(i);
         cfg.index = static_cast<int>(i);
         cfg.camId = camIds[i];
@@ -227,7 +240,8 @@ int main(int argc, char** argv) {
     }
 
     camsyringe::ui::MainWindow window(&pool, QString::fromStdString(target), controlPort,
-                                       QString::fromStdString(sshUser), injectOnly, qcxBypass,
+                                       QString::fromStdString(sshUser),
+                                       QString::fromStdString(sshKeyPath), injectOnly, qcxBypass,
                                        QString::fromStdString(blfFile),
                                        QString::fromStdString(blfInterface), playAll);
     window.resize(1280, 720);

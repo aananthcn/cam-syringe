@@ -10,16 +10,17 @@
 namespace camsyringe {
 
 void InjectorBundleInstaller::installAsync(TargetSsh& ssh, QString target, int controlPort,
-                                            QString sshUser, QString bundlePath, QString bundleVersion,
-                                            ConfirmCallback confirm, CredentialsCallback credentials,
-                                            ProgressCallback progress, ResultCallback onDone) {
+                                            QString sshUser, QString sshKeyPath, QString bundlePath,
+                                            QString bundleVersion, ConfirmCallback confirm,
+                                            CredentialsCallback credentials, ProgressCallback progress,
+                                            ResultCallback onDone) {
     std::thread([&ssh, target = std::move(target), controlPort, sshUser = std::move(sshUser),
-                 bundlePath = std::move(bundlePath), bundleVersion = std::move(bundleVersion),
-                 confirm = std::move(confirm), credentials = std::move(credentials),
-                 progress = std::move(progress),
+                 sshKeyPath = std::move(sshKeyPath), bundlePath = std::move(bundlePath),
+                 bundleVersion = std::move(bundleVersion), confirm = std::move(confirm),
+                 credentials = std::move(credentials), progress = std::move(progress),
                  onDone = std::move(onDone)]() mutable { // mutable: confirm() below rewrites
                                                           // bundlePath/bundleVersion in place
-        if (!ssh.ensureAuth(target, sshUser, credentials)) {
+        if (!ssh.ensureAuth(target, sshUser, sshKeyPath, credentials)) {
             onDone(false, "Cancelled.");
             return;
         }

@@ -36,6 +36,28 @@ QStringList commonSshOpts() {
     return {"-o", "ConnectTimeout=8", "-o", "StrictHostKeyChecking=accept-new"};
 }
 
+// -i <path> plus IdentitiesOnly=yes when a specific key is configured --
+// see ensureAuth()'s own comment for why IdentitiesOnly matters (avoids
+// ssh trying every other default/agent identity before this one, which
+// risks a server-side "too many authentication failures" lockout).
+// Empty keyPath (the common case -- no explicit key configured) adds
+// nothing, leaving ssh's own default identity/agent behavior untouched.
+QStringList keyOpts(const QString& keyPath) {
+    if (keyPath.isEmpty()) return {};
+    return {"-i", keyPath, "-o", "IdentitiesOnly=yes"};
+}
+
+// Same logic as TcpConnect.h's bracketHostIfIPv6, QString-native since
+// this whole file works in QString throughout -- needed wherever
+// `target` gets concatenated into a "user@host" or "user@host:path"
+// ssh/scp ARGUMENT: an IPv6 literal's own colons are otherwise
+// indistinguishable from the host:port/host:path separator (scp's
+// legacy syntax in particular cannot be parsed at all without this for
+// an IPv6 target). Deliberately never applied to `target` itself where
+// it's used as the auth cache key (authByTarget_) -- only to the text
+// actually handed to the ssh/scp process.
+QString bracketIfIPv6(const QString& host) { return host.contains(':') ? "[" + host + "]" : host; }
+
 } // namespace
 
 QString TargetSsh::ensureAskpassScript() {
@@ -63,7 +85,7 @@ bool TargetSsh::lookupAuth(const QString& target, Auth* out) {
 }
 
 bool TargetSsh::ensureAuth(const QString& target, const QString& defaultUser,
-                            const CredentialsCallback& credentials) {
+                            const QString& defaultKeyPath, const CredentialsCallback& credentials) {
     Auth cached;
     if (lookupAuth(target, &cached)) {
         return true;
@@ -75,18 +97,25 @@ bool TargetSsh::ensureAuth(const QString& target, const QString& defaultUser,
 
     // Passwordless probe -- BatchMode=yes here ONLY (it globally disables
     // password/askpass querying too, so it must never be set once we're
-    // in password-auth mode below).
+    // in password-auth mode below). Covers BOTH "no key needed at all"
+    // (default agent/identity already trusted) and "use this specific
+    // key" (defaultKeyPath set) -- same probe either way, see keyOpts()'s
+    // own comment.
     QStringList probeArgs = commonSshOpts();
-    probeArgs << "-o"
-              << "BatchMode=yes" << (auth.user + "@" + target) << "true";
+    probeArgs << keyOpts(defaultKeyPath) << "-o"
+              << "BatchMode=yes" << (auth.user + "@" + bracketIfIPv6(target)) << "true";
     RunResult probe = runProcess("ssh", probeArgs, auth.env, 8000);
 
-    if (probe.exitCode != 0) {
+    if (probe.exitCode == 0) {
+        auth.keyPath = defaultKeyPath;
+    } else {
         QString username = auth.user, password;
         if (!credentials(target, &username, &password)) {
             return false;
         }
         auth.user = username;
+        // auth.keyPath left empty -- this is the password/askpass path,
+        // no key involved.
         QString askpassPath;
         {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -113,6 +142,14 @@ QString TargetSsh::resolvedUser(const QString& target) {
     return QString();
 }
 
+QString TargetSsh::resolvedKeyPath(const QString& target) {
+    Auth cached;
+    if (lookupAuth(target, &cached)) {
+        return cached.keyPath;
+    }
+    return QString();
+}
+
 TargetSsh::Result TargetSsh::run(const QString& target, const QString& remoteCommand,
                                   int timeoutMs) {
     Auth auth;
@@ -120,7 +157,7 @@ TargetSsh::Result TargetSsh::run(const QString& target, const QString& remoteCom
         return {-1, QString(), "ensureAuth() was not called (or failed) for " + target};
     }
     QStringList args = commonSshOpts();
-    args << (auth.user + "@" + target) << remoteCommand;
+    args << keyOpts(auth.keyPath) << (auth.user + "@" + bracketIfIPv6(target)) << remoteCommand;
     RunResult r = runProcess("ssh", args, auth.env, timeoutMs);
     return {r.exitCode, r.stdOut, r.stdErr};
 }
@@ -132,7 +169,8 @@ TargetSsh::Result TargetSsh::scp(const QString& localPath, const QString& target
         return {-1, QString(), "ensureAuth() was not called (or failed) for " + target};
     }
     QStringList args = commonSshOpts();
-    args << localPath << (auth.user + "@" + target + ":" + remotePath);
+    args << keyOpts(auth.keyPath) << localPath
+         << (auth.user + "@" + bracketIfIPv6(target) + ":" + remotePath);
     RunResult r = runProcess("scp", args, auth.env, timeoutMs);
     return {r.exitCode, r.stdOut, r.stdErr};
 }

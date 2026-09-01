@@ -90,9 +90,9 @@ public:
     // (no CLI video files given) and startImmediately is false, the
     // Camera dialog is opened automatically once the window is shown.
     explicit MainWindow(camsyringe::StreamPool* pool, QString initialTarget, int initialControlPort,
-                         QString initialSshUser, bool initialInjectOnly, bool initialQcxBypass,
-                         QString initialBlfPath, QString initialBlfInterface, bool startImmediately,
-                         QWidget* parent = nullptr);
+                         QString initialSshUser, QString initialSshKeyPath, bool initialInjectOnly,
+                         bool initialQcxBypass, QString initialBlfPath, QString initialBlfInterface,
+                         bool startImmediately, QWidget* parent = nullptr);
     ~MainWindow() override = default;
 
 protected:
@@ -185,6 +185,12 @@ private:
     // but deliberately can't change it, see runInjectorInstall()'s own
     // confirm callback.
     QString sshUser_ = "root";
+    // Optional SSH private key path, passed to every TargetSsh::ensureAuth()
+    // call alongside sshUser_ -- empty (the default) means "no explicit
+    // key, use ssh's own default identity/agent", exactly today's
+    // behavior. Set from Configure's own "SSH key" field or --ssh-key;
+    // same editable-only-through-Configure convention as sshUser_.
+    QString sshKeyPath_;
     bool injectOnly_ = false;
     bool qcxBypass_ = false;
     // Empty blfPath_ means BLF/Ethernet replay is disabled this session --

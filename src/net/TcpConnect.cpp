@@ -13,7 +13,14 @@ namespace camsyringe {
 
 int connectWithTimeout(const std::string& host, int port, int timeoutSec, std::string* outErr) {
     addrinfo hints{};
-    hints.ai_family = AF_INET;
+    // AF_UNSPEC (not AF_INET): resolves to whichever family `host`
+    // actually is -- IPv4, IPv6, or (for a hostname) whatever DNS
+    // returns. This was hardcoded to AF_INET before, which made an IPv6
+    // target fail to resolve at all (getaddrinfo() simply refuses to
+    // return an IPv6 result under an IPv4-only hint) -- socket() just
+    // below already correctly uses result->ai_family (not a hardcoded
+    // one), so this one-line change is the whole fix here.
+    hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
     addrinfo* result = nullptr;
     std::string portStr = std::to_string(port);
@@ -84,6 +91,13 @@ bool readLine(int fd, std::string& out) {
         if (c != '\r') out.push_back(c);
         if (out.size() > 256) return false; // malformed/oversized line -- bail
     }
+}
+
+std::string bracketHostIfIPv6(const std::string& host) {
+    if (host.find(':') != std::string::npos) {
+        return "[" + host + "]";
+    }
+    return host;
 }
 
 } // namespace camsyringe

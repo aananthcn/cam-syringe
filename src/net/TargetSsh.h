@@ -46,15 +46,25 @@ public:
 
     // Resolves and caches auth for `target` if not already done this
     // session. Safe to call before every run()/scp() -- a fast no-op
-    // once resolved (defaultUser is then ignored -- whatever's already
-    // cached wins, matching how a credentials-prompt override works the
-    // same way). defaultUser is tried passwordless first (e.g.
-    // MainWindow's sshUser_, from Configure's "SSH user" field or
-    // --target user@host -- "root" if the caller passes empty); only on
-    // failure does the credentials callback get a chance to override it.
-    // Returns false only if the user cancelled the credentials prompt.
+    // once resolved (defaultUser/defaultKeyPath are then ignored --
+    // whatever's already cached wins, matching how a credentials-prompt
+    // override works the same way). defaultUser is tried passwordless
+    // first (e.g. MainWindow's sshUser_, from Configure's "SSH user"
+    // field or --target user@host -- "root" if the caller passes empty).
+    // defaultKeyPath, if non-empty (Configure's "SSH key" field or
+    // --ssh-key), adds `-i <path> -o IdentitiesOnly=yes` to that same
+    // passwordless attempt -- IdentitiesOnly so ssh tries ONLY this key
+    // (not also every other default identity/agent key first, which
+    // would otherwise risk a "too many authentication failures" server-
+    // side lockout before this key is ever offered). Only on failure
+    // does the credentials callback get a chance to override with a
+    // password instead (a key that needs an interactive passphrase --
+    // as opposed to one already unlocked in an agent -- falls through to
+    // this same password prompt, since BatchMode=yes can't prompt for a
+    // passphrase itself). Returns false only if the user cancelled the
+    // credentials prompt.
     bool ensureAuth(const QString& target, const QString& defaultUser,
-                     const CredentialsCallback& credentials);
+                     const QString& defaultKeyPath, const CredentialsCallback& credentials);
 
     // ensureAuth() for `target` MUST have already succeeded, or these
     // return a -1 "not authenticated" result without running anything.
@@ -69,9 +79,16 @@ public:
     // to gate anything, callers must still go through ensureAuth().
     QString resolvedUser(const QString& target);
 
+    // The SSH key path resolved for `target`, if ensureAuth() succeeded
+    // via a key (empty if none was used -- password/default-agent auth,
+    // or not yet resolved). DISPLAY only, same convention as
+    // resolvedUser().
+    QString resolvedKeyPath(const QString& target);
+
 private:
     struct Auth {
         QString user;
+        QString keyPath; // empty: no explicit key, use default identity/agent
         QProcessEnvironment env;
     };
 

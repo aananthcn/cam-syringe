@@ -26,4 +26,16 @@ bool sendAll(int fd, const std::string& data);
 // from another thread unblocks a pending recv().
 bool readLine(int fd, std::string& out);
 
+// Wraps `host` in "[...]" if (and only if) it looks like an IPv6 literal
+// (contains a ':' -- never true for an IPv4 address or a hostname) --
+// needed anywhere a host gets concatenated with a following ":port" or
+// ":path" into ONE string for something ELSE to parse later (an RTP URL
+// ffmpeg parses, or an ssh/scp "user@host:..." argument): unbracketed,
+// an IPv6 literal's own colons are indistinguishable from that
+// separator. NOT needed for connectWithTimeout() itself -- host and port
+// are already separate parameters there, exactly what getaddrinfo()
+// itself wants (plain, unbracketed). IPv4/hostnames pass through
+// unchanged.
+std::string bracketHostIfIPv6(const std::string& host);
+
 } // namespace camsyringe

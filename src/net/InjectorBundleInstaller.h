@@ -59,13 +59,14 @@ public:
     using ProgressCallback = std::function<void(int percent, QString label)>;
 
     // controlPort is only needed for the post-install restart's
-    // "wait for the dispatcher to actually come back up" poll. sshUser is
-    // passed straight through to ssh.ensureAuth() as the passwordless
-    // default (MainWindow's sshUser_ -- see its own comment).
+    // "wait for the dispatcher to actually come back up" poll. sshUser/
+    // sshKeyPath are passed straight through to ssh.ensureAuth() as the
+    // passwordless defaults (MainWindow's sshUser_/sshKeyPath_ -- see
+    // their own comments).
     static void installAsync(TargetSsh& ssh, QString target, int controlPort, QString sshUser,
-                              QString bundlePath, QString bundleVersion, ConfirmCallback confirm,
-                              CredentialsCallback credentials, ProgressCallback progress,
-                              ResultCallback onDone);
+                              QString sshKeyPath, QString bundlePath, QString bundleVersion,
+                              ConfirmCallback confirm, CredentialsCallback credentials,
+                              ProgressCallback progress, ResultCallback onDone);
 };
 
 } // namespace camsyringe

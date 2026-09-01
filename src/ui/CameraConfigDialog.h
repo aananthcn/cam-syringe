@@ -29,14 +29,15 @@ class CameraConfigDialog : public QDialog {
 public:
     // camIds: parallel to initialFiles (same length or shorter -- missing
     // entries default to a distinct id, see .cpp). controlPort/sshUser/
-    // injectOnly/qcxBypass/blf*: the previous session's settings, so
-    // re-opening Configure doesn't reset them. initialBlfPath empty means
-    // BLF replay starts unchecked.
+    // sshKeyPath/injectOnly/qcxBypass/blf*: the previous session's
+    // settings, so re-opening Configure doesn't reset them. initialBlfPath
+    // empty means BLF replay starts unchecked.
     explicit CameraConfigDialog(const QString& initialTarget, int initialControlPort,
-                                 const QString& initialSshUser, const QStringList& initialFiles,
-                                 const std::vector<int>& initialCamIds, bool initialInjectOnly,
-                                 bool initialQcxBypass, const QString& initialBlfPath,
-                                 const QString& initialBlfInterface, QWidget* parent = nullptr);
+                                 const QString& initialSshUser, const QString& initialSshKeyPath,
+                                 const QStringList& initialFiles, const std::vector<int>& initialCamIds,
+                                 bool initialInjectOnly, bool initialQcxBypass,
+                                 const QString& initialBlfPath, const QString& initialBlfInterface,
+                                 QWidget* parent = nullptr);
 
     QString target() const;
     int controlPort() const;
@@ -46,6 +47,11 @@ public:
     // is the one place to change it (see MainWindow::sshUser_'s own
     // comment).
     QString sshUser() const;
+    // Optional SSH private key path (-i) for that same authentication --
+    // empty means "no explicit key, use ssh's own default identity/agent"
+    // (today's behavior, unchanged). Browsable via the field's own
+    // "Browse..." button; can also be typed/pasted directly.
+    QString sshKeyPath() const;
     QStringList videoFiles() const;  // exactly count() entries, in order
     std::vector<int> camIds() const; // exactly count() entries, in order, parallel to videoFiles()
     bool injectOnly() const;
@@ -58,6 +64,7 @@ public:
 private slots:
     void onCountChanged(int count);
     void onBrowseClicked(int row);
+    void onSshKeyBrowseClicked();
     void onBlfBrowseClicked();
     void onBlfEnabledChanged(int state);
     void onAccept();
@@ -68,6 +75,8 @@ private:
     QLineEdit* targetEdit_ = nullptr;
     QSpinBox* controlPortSpin_ = nullptr;
     QLineEdit* sshUserEdit_ = nullptr;
+    QLineEdit* sshKeyPathEdit_ = nullptr;
+    QPushButton* sshKeyBrowseButton_ = nullptr;
     QSpinBox* countSpin_ = nullptr;
     QCheckBox* injectOnlyCheck_ = nullptr;
     QCheckBox* qcxBypassCheck_ = nullptr;
