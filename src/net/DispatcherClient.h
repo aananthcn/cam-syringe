@@ -23,6 +23,17 @@ struct CameraDeclareOutcome {
     std::string errorReason; // empty when result == Ready
 };
 
+// A best-effort, independent-of-READY/ERROR notice that the TARGET's own
+// local preview (qcarcam_viewer, its physical-panel quadrant for this
+// camera) failed -- see qcarcam_dispatcher's PREVIEW_ERROR protocol line
+// (qcarcam-injector/ARCHITECTURE.md item 33). camId is still genuinely
+// READY/injecting when this shows up; only its on-target preview
+// rendering is affected, never CamSyringe's own local streaming/preview.
+struct PreviewIssue {
+    int camId = 0;
+    std::string reason;
+};
+
 // Talks to qcarcam_dispatcher's control-channel protocol on the target
 // (see qcarcam-injector/ARCHITECTURE.md items 29/30 for the target-side
 // half of this): declares which QCarCam id each camera's RTP stream
@@ -46,7 +57,11 @@ public:
     // connect (or the declaration send) itself failed -- the caller MUST
     // marshal to the GUI thread itself (e.g. QMetaObject::invokeMethod),
     // same convention as StreamPool::PreviewCallback/ErrorCallback.
+    // previewIssues is separate from outcomes -- see PreviewIssue's own
+    // comment -- and is always empty when connectFailed is true (nothing
+    // to report on a connection that never even declared).
     using DeclareCallback = std::function<void(std::vector<CameraDeclareOutcome> outcomes,
+                                                std::vector<PreviewIssue> previewIssues,
                                                 bool connectFailed, std::string connectError)>;
 
     DispatcherClient();
@@ -57,8 +72,11 @@ public:
 
     // Connects to target:controlPort, sends one "CAM <id> <port>" line per
     // entry in `cameras` plus an optional "FLAGS ..." line (only emitted
-    // if injectOnly or qcxBypass is true) then "END", reads back exactly
-    // cameras.size() READY/ERROR lines followed by DONE, and invokes
+    // if injectOnly or qcxBypass is true) then "END", reads lines until
+    // DONE (READY/ERROR lines collected into outcomes, PREVIEW_ERROR
+    // lines into previewIssues -- see PreviewIssue's own comment; any
+    // other/unrecognized line is ignored, forward-compatible with a
+    // future line this client doesn't understand yet), and invokes
     // `callback` -- exactly once, either with the per-camera outcomes or
     // with connectFailed set. After the callback fires, the connection
     // stays open (silently) until disconnect() is called -- see class
@@ -67,6 +85,14 @@ public:
     // supported).
     void declareAsync(std::string target, int controlPort, std::vector<CameraDeclaration> cameras,
                        bool injectOnly, bool qcxBypass, DeclareCallback callback);
+
+    // True once a previous declareAsync() has connected and is still
+    // holding that connection open (Playing or Paused -- see class
+    // comment), false once disconnect() has run or a declaration never
+    // got this far. Lets a caller resuming from Pause skip redeclaring
+    // entirely when the target's own session is confirmed still alive --
+    // see MainWindow::startStreaming()'s own use of this.
+    bool isConnected() const { return socketFd_.load() >= 0; }
 
     // Closes the connection -- the target-side teardown signal. Safe to
     // call even if declareAsync() was never called, already completed, or

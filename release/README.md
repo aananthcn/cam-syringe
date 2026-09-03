@@ -33,15 +33,18 @@ From this directory, on your Linux build machine (needs this project's
 own build Prerequisites -- see the main `README.md`):
 
 ```bash
-./create-cam-syringe-bundle.sh 0.5
+./create-cam-syringe-bundle.sh
 ```
 
 This builds `camsyringe` fresh (pass `--skip-build` to package an
 already-built `build/` as-is instead) and produces
-`release/artifacts/camsyringe_bundle_v0.5.bin` (gitignored -- release
-bundles are build output, not source; distribute them separately, e.g.
-attached to a GitHub Release or shared drive, not committed to this
-repo).
+`release/artifacts/camsyringe_bundle_v<version>.bin` (gitignored --
+release bundles are build output, not source; distribute them
+separately, e.g. attached to a GitHub Release or shared drive, not
+committed to this repo). The version comes from `version.txt` at the
+repo root -- the same version CamSyringe's own Help > About shows; bump
+that file to release a new version, nothing here takes a version
+argument of its own.
 
 Note the bundle is considerably larger than just the binary now (~180MB,
 vs ~8MB for a version that relied on the receiving machine's own Qt6/
@@ -72,8 +75,8 @@ Useful options (see `./create-cam-syringe-bundle.sh --help` for the full list):
 ### 1. Copy the bundle over and install it
 
 ```bash
-scp camsyringe_bundle_v0.5.bin teammate@pc:/tmp/
-ssh teammate@pc
+scp camsyringe_bundle_v0.5.bin test-pc@test-pc-ip:/tmp/
+ssh test-pc@test-pc-ip
 /tmp/camsyringe_bundle_v0.5.bin
 ```
 
@@ -129,12 +132,29 @@ same Linux bundle above inside WSL2 (WSLg handles the GUI window), and
 launcher into one `.zip` a teammate downloads and double-clicks:
 
 ```bash
-./create-cam-syringe-bundle.sh 0.5   # Linux bundle, as above
-./create-windows-bundle.sh 0.5       # wraps it for Windows
+./create-cam-syringe-bundle.sh   # Linux bundle, as above
+./create-windows-bundle.sh       # wraps it for Windows
 ```
 
 See `release/windows/README.md` for the full picture, including the
 **untested on real Windows hardware** caveat.
+
+### Packaging the injector bundle alongside it
+
+CamSyringe's "Install Injector" menu action pushes a
+`qcarcam_injector_bundle_vX.Y.bin` (built separately, by
+`~/labs/qnx/qnx_toolkit/release/create-qcarcam-inj-bundle.sh` -- a
+different, unrelated project/repo) to a target over SSH. It isn't
+required to be here -- CamSyringe falls back to a one-time file picker
+and remembers wherever you point it -- but dropping a copy into this
+project's own `release/artifacts/` makes both `create-windows-bundle.sh`
+(packs it into the `.zip`) and a local dev build (`build/camsyringe`
+looks in `release/artifacts/` automatically) find it with zero extra
+setup:
+
+```bash
+cp ~/labs/qnx/qnx_toolkit/release/artifacts/qcarcam_injector_bundle_v0.5.bin release/artifacts/
+```
 
 ## Files here
 

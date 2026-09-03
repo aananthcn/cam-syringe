@@ -289,6 +289,24 @@ Copy-Item -Path $BundlePath -Destination $uncTarget -Force
 # itself exactly like an interactive user typing the same path would.
 wsl -d $DistroName -- bash -lc "chmod +x '$wslBundlePath' && CAMSYRINGE_INSTALL_DIR=$InstallDirInWsl '$wslBundlePath'"
 
+# Optional: a qcarcam_injector_bundle_vX.Y.bin sitting next to this script
+# (create-windows-bundle.sh packs one in when available -- see its own
+# comment) gets copied to the INSTALL ROOT inside WSL (sibling to bin/
+# lib/plugins, e.g. ~/camsyringe/qcarcam_injector_bundle_v0.5.bin) so
+# CamSyringe's own "Install Injector" menu action auto-detects it with no
+# extra setup (its InjectorBundleFinder looks at its own install
+# directory). Best-effort -- nothing breaks if it's missing; the teammate
+# just gets the same file-picker fallback as everyone else the first time.
+$injectorBundles = @(Get-ChildItem -Path $PSScriptRoot -Filter "qcarcam_injector_bundle_v*.bin" -File -ErrorAction SilentlyContinue)
+if ($injectorBundles.Count -eq 1) {
+    Write-Host "Copying $($injectorBundles[0].Name) into the WSL install directory..."
+    $injectorUncTarget = "\\wsl.localhost\$DistroName\tmp\$($injectorBundles[0].Name)"
+    Copy-Item -Path $injectorBundles[0].FullName -Destination $injectorUncTarget -Force
+    wsl -d $DistroName -- bash -lc "cp '/tmp/$($injectorBundles[0].Name)' $InstallDirInWsl/"
+} elseif ($injectorBundles.Count -gt 1) {
+    Write-Warning "Multiple qcarcam_injector_bundle_v*.bin found next to this script -- skipping automatic copy (CamSyringe's Install Injector action will prompt for one instead)."
+}
+
 Write-Host "== Creating a Windows launcher + Start Menu shortcut =="
 $launcherDir = "$env:LOCALAPPDATA\CamSyringe"
 New-Item -ItemType Directory -Path $launcherDir -Force | Out-Null

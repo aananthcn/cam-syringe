@@ -1,5 +1,13 @@
 cmake_minimum_required(VERSION 3.20)
-project(camsyringe CXX)
+
+# Single source of truth for CamSyringe's own version: version.txt at the
+# repo root. Compiled into the binary below (CAMSYRINGE_VERSION, shown by
+# Help > About) AND read directly by release/create-cam-syringe-bundle.sh
+# and release/create-windows-bundle.sh (neither takes a version argument
+# of its own anymore) -- one file, one number, nothing left to drift out
+# of sync between the binary and its own release bundles.
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/version.txt" CAMSYRINGE_VERSION LIMIT_COUNT 1)
+project(camsyringe VERSION ${CAMSYRINGE_VERSION} LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -69,11 +77,19 @@ add_executable(camsyringe
     src/camera/CameraStream.cpp
     src/camera/StreamPool.cpp
     src/net/DispatcherClient.cpp
+    src/net/DispatcherRemoteControl.cpp
+    src/net/DispatcherVersionProbe.cpp
+    src/net/InjectorBundleInstaller.cpp
+    src/net/TargetSsh.cpp
+    src/net/TcpConnect.cpp
     src/orchestrator/Timeline.cpp
     src/ui/MainWindow.cpp
     src/ui/CameraWidget.cpp
     src/ui/CameraConfigDialog.cpp
+    src/ui/SshCredentialsDialog.cpp
+    src/util/InjectorBundleFinder.cpp
 )
 
 target_include_directories(camsyringe PRIVATE src)
 target_link_libraries(camsyringe PRIVATE PkgConfig::FFMPEG Qt6::Widgets Threads::Threads Vector_BLF)
+target_compile_definitions(camsyringe PRIVATE CAMSYRINGE_VERSION="${CAMSYRINGE_VERSION}")

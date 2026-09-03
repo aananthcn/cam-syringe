@@ -47,6 +47,7 @@ void RememberBrowsedFile(const QString& file) {
 } // namespace
 
 CameraConfigDialog::CameraConfigDialog(const QString& initialTarget, int initialControlPort,
+                                        const QString& initialSshUser, const QString& initialSshKeyPath,
                                         const QStringList& initialFiles,
                                         const std::vector<int>& initialCamIds, bool initialInjectOnly,
                                         bool initialQcxBypass, const QString& initialBlfPath,
@@ -79,6 +80,29 @@ CameraConfigDialog::CameraConfigDialog(const QString& initialTarget, int initial
     controlPortSpin_->setRange(1, 65535);
     controlPortSpin_->setValue(initialControlPort);
     form->addRow(tr("Control port:"), controlPortSpin_);
+
+    // Everything CamSyringe does over SSH against `target` (install,
+    // Play-time dispatcher-start retry, Stop's target-process kill) uses
+    // this as the username to try passwordless first -- see
+    // MainWindow::sshUser_'s own comment. This is the one place to change
+    // it; the Install confirmation dialog only ever displays it.
+    sshUserEdit_ = new QLineEdit(initialSshUser.isEmpty() ? QStringLiteral("root") : initialSshUser, this);
+    form->addRow(tr("SSH user:"), sshUserEdit_);
+
+    // Optional -- empty (the default) leaves ssh's own default identity/
+    // agent behavior untouched, exactly as before this field existed.
+    // Browsable since a key file's real path is rarely something worth
+    // typing by hand (~/.ssh/id_rsa, a board-specific .pem, etc.).
+    auto* sshKeyRow = new QWidget(this);
+    auto* sshKeyRowLayout = new QHBoxLayout(sshKeyRow);
+    sshKeyRowLayout->setContentsMargins(0, 0, 0, 0);
+    sshKeyPathEdit_ = new QLineEdit(initialSshKeyPath, sshKeyRow);
+    sshKeyBrowseButton_ = new QPushButton(tr("Browse..."), sshKeyRow);
+    connect(sshKeyBrowseButton_, &QPushButton::clicked, this,
+            &CameraConfigDialog::onSshKeyBrowseClicked);
+    sshKeyRowLayout->addWidget(sshKeyPathEdit_, /*stretch=*/1);
+    sshKeyRowLayout->addWidget(sshKeyBrowseButton_);
+    form->addRow(tr("SSH key (optional):"), sshKeyRow);
 
     for (int i = 0; i < camsyringe::kMaxCameras; ++i) {
         rows_[i].container = new QWidget(this);
@@ -196,6 +220,24 @@ void CameraConfigDialog::onBrowseClicked(int row) {
     }
 }
 
+void CameraConfigDialog::onSshKeyBrowseClicked() {
+    // Default to ~/.ssh (the conventional location) when nothing's set
+    // yet, rather than the video-file browse dir -- an SSH key is rarely
+    // sitting next to a camera capture file. No filename filter -- key
+    // files don't have a consistent extension (id_rsa, id_ed25519, a
+    // board-specific .pem, ...).
+    QString startDir = sshKeyPathEdit_->text().trimmed().isEmpty()
+                            ? QDir::homePath() + "/.ssh"
+                            : QFileInfo(sshKeyPathEdit_->text().trimmed()).absolutePath();
+    if (!QDir(startDir).exists()) {
+        startDir = QDir::homePath();
+    }
+    QString file = QFileDialog::getOpenFileName(this, tr("Select SSH Private Key"), startDir);
+    if (!file.isEmpty()) {
+        sshKeyPathEdit_->setText(file);
+    }
+}
+
 void CameraConfigDialog::onBlfBrowseClicked() {
     QString file = QFileDialog::getOpenFileName(this, tr("Select BLF file"), BrowseStartDir(),
                                                  tr("Vector BLF files (*.blf);;All files (*)"));
@@ -212,6 +254,10 @@ void CameraConfigDialog::onBlfEnabledChanged(int) {
 void CameraConfigDialog::onAccept() {
     if (targetEdit_->text().trimmed().isEmpty()) {
         QMessageBox::warning(this, tr("Missing target"), tr("Enter a target host."));
+        return;
+    }
+    if (sshUserEdit_->text().trimmed().isEmpty()) {
+        QMessageBox::warning(this, tr("Missing SSH user"), tr("Enter an SSH username (e.g. root)."));
         return;
     }
     std::set<int> seenIds;
@@ -249,6 +295,10 @@ void CameraConfigDialog::onAccept() {
 QString CameraConfigDialog::target() const { return targetEdit_->text().trimmed(); }
 
 int CameraConfigDialog::controlPort() const { return controlPortSpin_->value(); }
+
+QString CameraConfigDialog::sshUser() const { return sshUserEdit_->text().trimmed(); }
+
+QString CameraConfigDialog::sshKeyPath() const { return sshKeyPathEdit_->text().trimmed(); }
 
 QStringList CameraConfigDialog::videoFiles() const {
     QStringList files;

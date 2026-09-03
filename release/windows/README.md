@@ -44,19 +44,32 @@ GUI support, no separate X server needed).
 
 ```bash
 cd release
-./create-cam-syringe-bundle.sh 0.5   # builds & packages the Linux bundle
-./create-windows-bundle.sh 0.5       # wraps it for Windows
+./create-cam-syringe-bundle.sh   # builds & packages the Linux bundle
+./create-windows-bundle.sh       # wraps it for Windows
 ```
 
-This produces `release/artifacts/camsyringe_windows_bundle_v0.5.zip`,
+Both read their version from `version.txt` at the repo root -- bump that
+to release a new version; neither script takes a version argument of its
+own. This produces `release/artifacts/camsyringe_windows_bundle_v0.5.zip`
+(filename reflecting whatever `version.txt` currently says),
 containing:
 
 ```
-camsyringe_bundle_v0.5.bin     the Linux bundle (create-cam-syringe-bundle.sh)
-install-camsyringe.cmd         double-click entry point
-setup-camsyringe-wsl.ps1       does the actual WSL2 setup + install
-                                (self-elevates via UAC only if/when needed)
+camsyringe_bundle_v0.5.bin           the Linux bundle (create-cam-syringe-bundle.sh)
+qcarcam_injector_bundle_v0.5.bin     optional -- see below
+install-camsyringe.cmd               double-click entry point
+setup-camsyringe-wsl.ps1              does the actual WSL2 setup + install
+                                      (self-elevates via UAC only if/when needed)
 ```
+
+The `qcarcam_injector_bundle_vX.Y.bin` is optional -- present only if one
+was sitting in `release/artifacts/` when `create-windows-bundle.sh` ran
+(see the main `release/README.md`'s "Packaging" note). If it's there,
+`setup-camsyringe-wsl.ps1` copies it into the WSL install directory
+alongside `run-camsyringe.sh`, so CamSyringe's own "Install Injector"
+menu action (see the main `README.md`) finds it automatically with no
+extra setup. If it's missing, that menu action just prompts for a file
+the first time instead.
 
 Send that one `.zip` to the Windows machine any way you like (USB,
 network share, etc.) — it's gitignored, not committed to this repo, same

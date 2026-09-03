@@ -10,7 +10,9 @@
 # extract, double-click install-camsyringe.cmd. No separate script + .bin
 # + README to hand over piecemeal, and setup-camsyringe-wsl.ps1
 # auto-detects the .bin sitting next to it in the extracted folder, so no
-# arguments either.
+# arguments either. Also picks up a qcarcam_injector_bundle_vX.Y.bin from
+# artifacts/ if one's there (optional -- see below), for CamSyringe's own
+# "Install Injector" feature.
 #
 # This does NOT build a Windows binary -- camsyringe still isn't a native
 # Windows app (see release/windows/README.md for why: BLF/Ethernet replay
@@ -23,42 +25,44 @@
 # script only assembles files, it doesn't change that.
 #
 # Usage:
-#   ./create-windows-bundle.sh <version-no> [options]
+#   ./create-windows-bundle.sh [options]
 #
 # Example:
-#   ./create-cam-syringe-bundle.sh 0.5   # builds the Linux bundle first
-#   ./create-windows-bundle.sh 0.5       # wraps it for Windows
+#   ./create-cam-syringe-bundle.sh   # builds the Linux bundle first
+#   ./create-windows-bundle.sh       # wraps it for Windows
 #
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WINDOWS_DIR="$SCRIPT_DIR/windows"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-VERSION=""
+# Single source of truth for CamSyringe's own version: version.txt at the
+# repo root (see CMakeLists.txt and create-cam-syringe-bundle.sh, which
+# read the same file) -- no version argument here either, so this and the
+# Linux bundle it wraps can never disagree about which version they are.
+VERSION="$(cat "$PROJECT_DIR/version.txt")"
 LINUX_BUNDLE=""
 OUTPUT_ZIP=""
-POSITIONAL=()
 
 usage() {
     cat <<EOF
-Usage: $(basename "$0") <version-no> [options]
+Usage: $(basename "$0") [options]
 
 Wraps the already-built Linux camsyringe bundle plus this project's WSL2
 installer/launcher into a single .zip for a Windows teammate to download
 and double-click. Build the Linux bundle first with
-./create-cam-syringe-bundle.sh <version-no>.
+./create-cam-syringe-bundle.sh.
 
-Arguments:
-  <version-no>          Bundle version (e.g. 0.5) -- REQUIRED, always the
-                         first argument. Used to locate the default input
-                         bundle and to name the output .zip.
+Version comes from version.txt at the repo root (v$VERSION right now) --
+used to locate the default input bundle and to name the output .zip.
 
 Options:
   --linux-bundle PATH   Path to the built camsyringe_bundle_vX.Y.bin.
-                         (default: release/artifacts/camsyringe_bundle_v<version-no>.bin)
+                         (default: release/artifacts/camsyringe_bundle_v${VERSION}.bin)
   --output PATH         Output path for the generated .zip, overriding
                          the default versioned filename.
-                         (default: release/artifacts/camsyringe_windows_bundle_v<version-no>.zip)
+                         (default: release/artifacts/camsyringe_windows_bundle_v${VERSION}.zip)
   -h, --help            Show this help and exit.
 EOF
 }
@@ -68,17 +72,9 @@ while [[ $# -gt 0 ]]; do
         --linux-bundle) LINUX_BUNDLE="$2"; shift 2 ;;
         --output) OUTPUT_ZIP="$2"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
-        --*) echo "Unknown argument: $1" >&2; usage; exit 1 ;;
-        *) POSITIONAL+=("$1"); shift ;;
+        *) echo "Unknown argument: $1" >&2; usage; exit 1 ;;
     esac
 done
-
-if [[ ${#POSITIONAL[@]} -eq 0 ]]; then
-    echo "ERROR: <version-no> is required as the first argument (e.g. '$(basename "$0") 0.5')." >&2
-    usage
-    exit 1
-fi
-VERSION="${POSITIONAL[0]}"
 
 if [[ -z "$LINUX_BUNDLE" ]]; then
     LINUX_BUNDLE="$SCRIPT_DIR/artifacts/camsyringe_bundle_v${VERSION}.bin"
@@ -88,7 +84,7 @@ if [[ -z "$OUTPUT_ZIP" ]]; then
 fi
 
 if [[ ! -f "$LINUX_BUNDLE" ]]; then
-    echo "ERROR: $LINUX_BUNDLE not found -- build it first: ./create-cam-syringe-bundle.sh $VERSION" >&2
+    echo "ERROR: $LINUX_BUNDLE not found -- build it first: ./create-cam-syringe-bundle.sh" >&2
     exit 1
 fi
 if [[ ! -f "$WINDOWS_DIR/install-camsyringe.cmd" ]]; then
@@ -106,6 +102,36 @@ trap 'rm -rf "$STAGE"' EXIT
 cp "$LINUX_BUNDLE" "$STAGE/"
 cp "$WINDOWS_DIR/install-camsyringe.cmd" "$STAGE/"
 cp "$WINDOWS_DIR/setup-camsyringe-wsl.ps1" "$STAGE/"
+
+# Optional: the qcarcam-injector bundle (built separately, see
+# ~/labs/qnx/qnx_toolkit/release/create-qcarcam-inj-bundle.sh), if a copy
+# has been placed in this same artifacts/ dir alongside the Linux
+# camsyringe bundle. Not required -- CamSyringe's own "Install Injector"
+# menu action falls back to a file picker (and remembers wherever the
+# user points it) when this isn't already sitting next to it -- but
+# shipping it here means it Just Works for a teammate with zero extra
+# setup, landing as a sibling of run-camsyringe.sh inside WSL (see
+# setup-camsyringe-wsl.ps1).
+INJECTOR_BUNDLES=("$SCRIPT_DIR"/artifacts/qcarcam_injector_bundle_v*.bin)
+if [[ -e "${INJECTOR_BUNDLES[0]}" ]]; then
+    # Ship only the HIGHEST version found, not every leftover sitting in
+    # artifacts/ -- confirmed for real this matters: artifacts/ isn't
+    # cleaned between builds, so an older qcarcam_injector_bundle_vX.Y.bin
+    # from a previous release stays right where a newer one lands, and
+    # copying the whole glob (the original bug here) silently shipped
+    # BOTH in the same .zip. `sort -V` (version sort) orders "0.6" before
+    # "0.7" (and "0.10" after "0.9", unlike a plain lexical sort) --
+    # `tail -1` picks the newest.
+    if [[ ${#INJECTOR_BUNDLES[@]} -gt 1 ]]; then
+        LATEST_INJECTOR_BUNDLE="$(printf '%s\n' "${INJECTOR_BUNDLES[@]}" | sort -V | tail -1)"
+        echo "NOTE: ${#INJECTOR_BUNDLES[@]} qcarcam_injector_bundle_v*.bin found in $SCRIPT_DIR/artifacts -- shipping only the latest ($(basename "$LATEST_INJECTOR_BUNDLE")). Consider removing the older one(s) from that directory." >&2
+    else
+        LATEST_INJECTOR_BUNDLE="${INJECTOR_BUNDLES[0]}"
+    fi
+    cp "$LATEST_INJECTOR_BUNDLE" "$STAGE/"
+else
+    echo "NOTE: no qcarcam_injector_bundle_v*.bin found in $SCRIPT_DIR/artifacts -- shipping without it (optional)." >&2
+fi
 
 mkdir -p "$(dirname "$OUTPUT_ZIP")"
 rm -f "$OUTPUT_ZIP"

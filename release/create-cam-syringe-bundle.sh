@@ -79,12 +79,12 @@
 #     there is nothing left for the receiving machine to install.
 #
 # Usage:
-#   ./create-cam-syringe-bundle.sh <version-no> [options]
+#   ./create-cam-syringe-bundle.sh [options]
 #
 # Example:
-#   ./create-cam-syringe-bundle.sh 0.5
-#   scp artifacts/camsyringe_bundle_v0.5.bin teammate@pc:/tmp/
-#   ssh teammate@pc '/tmp/camsyringe_bundle_v0.5.bin && ~/camsyringe/run-camsyringe.sh'
+#   ./create-cam-syringe-bundle.sh   # version comes from version.txt
+#   scp artifacts/camsyringe_bundle_v0.5.bin test-pc@test-pc-ip:/tmp/
+#   ssh test-pc@test-pc-ip '/tmp/camsyringe_bundle_v0.5.bin && ~/camsyringe/run-camsyringe.sh'
 #
 set -eu
 
@@ -92,12 +92,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 BUILD_DIR="${BUILD_DIR:-$PROJECT_DIR/build}"
-VERSION=""
 OUTPUT_BIN=""
 INSTALL_DIR_DEFAULT="\$HOME/camsyringe"
 COMPRESS=0
 SKIP_BUILD=0
-POSITIONAL=()
+
+# Single source of truth for CamSyringe's own version: version.txt at the
+# repo root (also compiled into the binary itself, see CMakeLists.txt --
+# CAMSYRINGE_VERSION, shown by Help > About). No version argument here
+# anymore -- one file, one number, nothing to independently type (and
+# nothing to drift out of sync with what the binary reports) on every
+# release.
+VERSION="$(cat "$PROJECT_DIR/version.txt")"
 
 # Qt dlopen()s its platform plugin at runtime -- not a normal link
 # dependency, so it must be located separately from camsyringe's own
@@ -114,7 +120,7 @@ EXCLUDE_SONAME_RE='^(linux-vdso\.so|libc\.so|libm\.so|libdl\.so|libpthread\.so|l
 
 usage() {
     cat <<EOF
-Usage: $(basename "$0") <version-no> [options]
+Usage: $(basename "$0") [options]
 
 Packages the built camsyringe binary together with its ENTIRE runtime
 dependency closure (Qt6, FFmpeg, X11/xcb, everything they need in turn --
@@ -122,12 +128,11 @@ computed via ldd, not a static list) into a self-extracting .bin
 installer for a teammate's Linux PC. Zero extra install steps on the
 receiving machine.
 
-Arguments:
-  <version-no>      Bundle version (e.g. 0.5) -- REQUIRED, always the
-                     first argument. Baked into the output filename
-                     (artifacts/camsyringe_bundle_v<version-no>.bin,
-                     unless --output overrides it) and printed by the
-                     installer/run script.
+Version comes from version.txt at the repo root (v$VERSION right now) --
+the same version compiled into the binary itself (Help > About). Baked
+into the output filename (artifacts/camsyringe_bundle_v${VERSION}.bin,
+unless --output overrides it). Bump version.txt to release a new version;
+nothing here takes a version argument of its own.
 
 Options:
   --build-dir PATH     Build directory to pull camsyringe/libVector_BLF from.
@@ -136,7 +141,7 @@ Options:
                         (default: $QT_PLUGIN_DIR)
   --output PATH        Output path for the generated self-extracting .bin,
                         overriding the default versioned filename.
-                        (default: release/artifacts/camsyringe_bundle_v<version-no>.bin)
+                        (default: release/artifacts/camsyringe_bundle_v${VERSION}.bin)
   --skip-build          Don't (re)build first -- package whatever's already
                         in --build-dir as-is. Default: runs a clean
                         cmake --build first, so the bundle always reflects
@@ -156,17 +161,9 @@ while [[ $# -gt 0 ]]; do
         --skip-build) SKIP_BUILD=1; shift ;;
         --compress) COMPRESS=1; shift ;;
         -h|--help) usage; exit 0 ;;
-        --*) echo "Unknown argument: $1" >&2; usage; exit 1 ;;
-        *) POSITIONAL+=("$1"); shift ;;
+        *) echo "Unknown argument: $1" >&2; usage; exit 1 ;;
     esac
 done
-
-if [[ ${#POSITIONAL[@]} -eq 0 ]]; then
-    echo "ERROR: <version-no> is required as the first argument (e.g. '$(basename "$0") 0.5')." >&2
-    usage
-    exit 1
-fi
-VERSION="${POSITIONAL[0]}"
 
 if [[ -z "$OUTPUT_BIN" ]]; then
     OUTPUT_BIN="$SCRIPT_DIR/artifacts/camsyringe_bundle_v${VERSION}.bin"
@@ -378,6 +375,15 @@ echo "Install directory: \$INSTALL_DIR"
 # extracts on top of whatever's already there.
 mkdir -p "\$INSTALL_DIR/bin" "\$INSTALL_DIR/lib" "\$INSTALL_DIR/plugins"
 
+# Record where this .bin was actually run from -- CamSyringe's own
+# "Install Injector" menu action (InjectorBundleFinder) reads this to
+# default its file picker there instead of this install directory's own
+# bin/ folder, since a sibling qcarcam_injector_bundle_vX.Y.bin is
+# typically sitting wherever THIS .bin was handed over/downloaded to
+# (see release/README.md's "Packaging" notes), not inside the install.
+SOURCE_DIR="\$(cd "\$(dirname "\$0")" && pwd)"
+echo "\$SOURCE_DIR" > "\$INSTALL_DIR/.install-source"
+
 echo "Extracting bundle..."
 ARCHIVE_LINE=\$(awk '/^__ARCHIVE_BELOW__\$/ { print NR + 1; exit 0 }' "\$0")
 tail -n +\$ARCHIVE_LINE "\$0" | ${DECOMPRESS_CMD} | tar xf - -C "\$INSTALL_DIR"
@@ -399,5 +405,5 @@ echo "-----------------------------------------------------------"
 echo "Bundle created: $OUTPUT_BIN ($(du -h "$OUTPUT_BIN" | cut -f1))"
 echo "-----------------------------------------------------------"
 echo "To install on a teammate's PC (default install dir $INSTALL_DIR_DEFAULT, override with CAMSYRINGE_INSTALL_DIR=...):"
-echo "  scp $OUTPUT_BIN teammate@pc:/tmp/"
-echo "  ssh teammate@pc '/tmp/$(basename "$OUTPUT_BIN") && ~/camsyringe/run-camsyringe.sh'"
+echo "  scp $OUTPUT_BIN test-pc@test-pc-ip:/tmp/"
+echo "  ssh test-pc@test-pc-ip '/tmp/$(basename "$OUTPUT_BIN") && ~/camsyringe/run-camsyringe.sh'"
