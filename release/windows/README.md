@@ -143,6 +143,23 @@ Re-run this after every fresh bundle install (a new binary means the
 capability needs setting again, same as on Linux). Camera streaming works
 without it.
 
+**Menu/button icons showing as empty boxes** (▶/⏸/⏹/⚙/⇪, the file icon on
+Camera Configs' Read button) is a known WSLg thing, not a CamSyringe bug —
+every icon in this app is a plain Unicode character, not a bundled image,
+and WSLg's own minimal font set often doesn't cover the Unicode blocks
+these particular characters live in (separate from whatever fonts Windows
+itself has — a Linux GUI app running inside WSL renders with WSL's own
+Linux-side fonts). One more one-time step *inside WSL* fixes it, same
+`sudo`-needs-a-password reason the installer doesn't do this
+automatically:
+
+```powershell
+wsl -d Ubuntu-22.04 -- sudo bash -c "apt-get update && apt-get install -y fonts-noto-color-emoji fonts-noto-symbols fonts-noto-symbols2"
+```
+
+No reboot or WSL restart needed — close and reopen CamSyringe and the
+icons should render normally.
+
 ## Why mirrored networking matters
 
 WSL2's *default* networking mode (NAT) puts the whole distro behind a
@@ -184,6 +201,7 @@ streaming still works, BLF replay won't.
    chmod +x /tmp/camsyringe_bundle_v0.5.bin
    /tmp/camsyringe_bundle_v0.5.bin
    sudo setcap cap_net_raw+ep ~/camsyringe/bin/camsyringe   # only if you need BLF replay
+   sudo apt-get update && sudo apt-get install -y fonts-noto-color-emoji fonts-noto-symbols fonts-noto-symbols2  # only if menu/button icons show as empty boxes
    ```
 4. Run it: `~/camsyringe/run-camsyringe.sh` — the Qt window should appear on the Windows desktop via WSLg. If it doesn't, confirm WSLg itself is working first with a simpler GUI test (Microsoft's docs cover this) before assuming it's a CamSyringe-specific problem.
 5. Optional: create your own Start Menu shortcut pointing at a `.cmd` file containing `wsl.exe -d Ubuntu-22.04 -- bash -lc "~/camsyringe/run-camsyringe.sh %*"`.

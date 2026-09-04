@@ -41,7 +41,8 @@ void printUsage(const char* prog) {
         "                     1,2,3,8). Each id must be 1-%d and unique.\n"
         "  --inject-only      Target-side: skip the local Screen/EGL preview render on the\n"
         "                     target entirely -- pure injection into qcxserver (see\n"
-        "                     qcarcam_dispatcher's own --inject-only flag)\n"
+        "                     qcarcam_dispatcher's own --inject-only flag). On by default;\n"
+        "                     uncheck it in Settings > CamSyringe to disable\n"
         "  --blf-file PATH    Vector BLF file to replay (Ethernet-frame objects only, see\n"
         "                     src/blf/BlfLoader.h) as raw AF_PACKET frames, original timing,\n"
         "                     verbatim (no header rewriting). Needs CAP_NET_RAW -- see\n"
@@ -118,7 +119,7 @@ int main(int argc, char** argv) {
     int controlPort = kDefaultControlPort;
     std::string camIdsArg;
     bool playAll = false;
-    bool injectOnly = false;
+    bool injectOnly = true;
     std::string sshKeyPath;
     std::string blfFile;
     std::string blfInterface = kDefaultBlfInterface;

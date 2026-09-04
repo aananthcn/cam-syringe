@@ -157,10 +157,10 @@ bool parseQueriedResolution(const QString& output, int camId, uint32_t* outWidth
 
 void CameraGeometryResolver::resolveAsync(TargetSsh& ssh, QString target, QString sshUser,
                                            QString sshKeyPath, std::vector<int> camIds,
-                                           Callback callback) {
+                                           Callback callback, ProgressCallback progressCallback) {
     std::thread([&ssh, target = std::move(target), sshUser = std::move(sshUser),
                  sshKeyPath = std::move(sshKeyPath), camIds = std::move(camIds),
-                 callback = std::move(callback)]() {
+                 callback = std::move(callback), progressCallback = std::move(progressCallback)]() {
         std::vector<ResolvedCameraGeometry> results;
         results.reserve(camIds.size());
 
@@ -171,6 +171,9 @@ void CameraGeometryResolver::resolveAsync(TargetSsh& ssh, QString target, QStrin
         if (!ssh.ensureAuth(target, sshUser, sshKeyPath, declineCredentials)) {
             for (int id : camIds) {
                 results.push_back(ResolvedCameraGeometry{id, false, false, 0, 0});
+                if (progressCallback) {
+                    progressCallback(static_cast<int>(results.size()), static_cast<int>(camIds.size()));
+                }
             }
             callback(std::move(results));
             return;
@@ -276,6 +279,9 @@ void CameraGeometryResolver::resolveAsync(TargetSsh& ssh, QString target, QStrin
             }
 
             results.push_back(geo);
+            if (progressCallback) {
+                progressCallback(static_cast<int>(results.size()), static_cast<int>(camIds.size()));
+            }
         }
 
         callback(std::move(results));

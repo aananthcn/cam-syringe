@@ -58,6 +58,54 @@ QStringList keyOpts(const QString& keyPath) {
 // actually handed to the ssh/scp process.
 QString bracketIfIPv6(const QString& host) { return host.contains(':') ? "[" + host + "]" : host; }
 
+// Real-world trigger, not a hypothetical: this project's own QNX target
+// regenerates its SSH host key on every reboot/reflash (confirmed
+// repeatedly, live, this session), so `known_hosts` accumulating a STALE
+// entry for the SAME IP is an expected, routine occurrence here, not a
+// meaningful security signal -- unlike a genuinely unexpected host-key
+// change against, say, a real production server. Before this, a stale
+// entry made ensureAuth()'s own passwordless probe fail for a reason
+// that has NOTHING to do with credentials, then fall through to
+// prompting the user for a username/password that could never actually
+// work either (password auth doesn't bypass host-key verification) --
+// confirmed as a real, reported bad user experience: CamSyringe asked
+// for credentials while the actual fix (`ssh-keygen -R <target>`) needed
+// a terminal the user was trying to avoid. `StrictHostKeyChecking=
+// accept-new` (see commonSshOpts()) already covers the OTHER case (an
+// entirely new/unknown host) automatically; this covers the CHANGED
+// case the same way, scoped narrowly to this exact message so a
+// genuinely different ssh failure still falls through to the normal
+// credentials prompt unchanged.
+bool looksLikeHostKeyChanged(const QString& stderrText) {
+    return stderrText.contains("REMOTE HOST IDENTIFICATION HAS CHANGED") ||
+           stderrText.contains("Host key verification failed");
+}
+
+// `ssh-keygen -R` matches by the exact host TEXT as connected to (see
+// bracketIfIPv6's own comment on why `target` itself is passed here
+// unbracketed) -- best-effort: if this itself fails for some reason
+// (e.g. no known_hosts file yet), the retry right after this call
+// naturally falls through to the normal credentials prompt just like
+// before this fix existed, so there's no new failure mode to handle.
+void removeStaleHostKey(const QString& target) {
+    QProcess::execute("ssh-keygen", {"-R", target});
+}
+
+// Shared by ensureAuth()'s own probe, run(), and scp() -- any of the
+// three can hit a stale known_hosts entry (the target can reboot/reflash
+// AFTER a session's initial ensureAuth() already succeeded, not just
+// before it), so all three get the same one-retry recovery rather than
+// only the first.
+RunResult runWithHostKeyRetry(const QString& program, const QStringList& args,
+                               const QProcessEnvironment& env, int timeoutMs, const QString& target) {
+    RunResult r = runProcess(program, args, env, timeoutMs);
+    if (r.exitCode != 0 && looksLikeHostKeyChanged(r.stdErr)) {
+        removeStaleHostKey(target);
+        r = runProcess(program, args, env, timeoutMs);
+    }
+    return r;
+}
+
 } // namespace
 
 QString TargetSsh::ensureAskpassScript() {
@@ -104,7 +152,12 @@ bool TargetSsh::ensureAuth(const QString& target, const QString& defaultUser,
     QStringList probeArgs = commonSshOpts();
     probeArgs << keyOpts(defaultKeyPath) << "-o"
               << "BatchMode=yes" << (auth.user + "@" + bracketIfIPv6(target)) << "true";
-    RunResult probe = runProcess("ssh", probeArgs, auth.env, 8000);
+    // See looksLikeHostKeyChanged()'s own comment: a stale known_hosts
+    // entry for this target (routine after a reboot/reflash on this
+    // project) makes the probe fail for a reason credentials can never
+    // fix -- clear it and retry ONCE before falling through to prompting
+    // for a username/password that would just hit the same wall.
+    RunResult probe = runWithHostKeyRetry("ssh", probeArgs, auth.env, 8000, target);
 
     if (probe.exitCode == 0) {
         auth.keyPath = defaultKeyPath;
@@ -158,7 +211,7 @@ TargetSsh::Result TargetSsh::run(const QString& target, const QString& remoteCom
     }
     QStringList args = commonSshOpts();
     args << keyOpts(auth.keyPath) << (auth.user + "@" + bracketIfIPv6(target)) << remoteCommand;
-    RunResult r = runProcess("ssh", args, auth.env, timeoutMs);
+    RunResult r = runWithHostKeyRetry("ssh", args, auth.env, timeoutMs, target);
     return {r.exitCode, r.stdOut, r.stdErr};
 }
 
@@ -171,7 +224,7 @@ TargetSsh::Result TargetSsh::scp(const QString& localPath, const QString& target
     QStringList args = commonSshOpts();
     args << keyOpts(auth.keyPath) << localPath
          << (auth.user + "@" + bracketIfIPv6(target) + ":" + remotePath);
-    RunResult r = runProcess("scp", args, auth.env, timeoutMs);
+    RunResult r = runWithHostKeyRetry("scp", args, auth.env, timeoutMs, target);
     return {r.exitCode, r.stdOut, r.stdErr};
 }
 

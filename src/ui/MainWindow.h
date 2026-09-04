@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QDateTime>
 #include <QImage>
 #include <QMainWindow>
 #include <QMap>
@@ -18,6 +19,7 @@ class QAction;
 class QCloseEvent;
 class QEvent;
 class QLabel;
+class QMenu;
 class QObject;
 class QProgressBar;
 class QTimer;
@@ -32,8 +34,12 @@ namespace camsyringe::ui {
 class CameraWidget;
 
 // Owns (a pointer to) a StreamPool and shows one CameraWidget per
-// configured camera in a grid. Three menu-bar actions are the only
-// controls: Play/Pause, Stop, and Configure -- see CONTEXT.md's
+// configured camera in a grid. Three menu-bar controls: Play/Pause,
+// Stop, and a "Settings" menu with two submenus -- "CamSyringe" (opens
+// CameraConfigDialog, the session settings this class comment otherwise
+// still calls "Configure") and "Camera" (opens CameraSettingsDialog, a
+// read-only viewer of each configured camera's real target-authored
+// resolution -- see onCameraSettingsTriggered()) -- see CONTEXT.md's
 // "UI requirements" for the exact state model.
 //
 // Play (from Idle, or after Stop) ALSO declares every configured camera
@@ -122,6 +128,7 @@ private slots:
     void onPlayPauseTriggered();
     void onStopTriggered();
     void onConfigureTriggered();
+    void onCameraSettingsTriggered();
     void onInstallInjectorTriggered();
     void onAboutTriggered();
 
@@ -301,6 +308,13 @@ private:
     // (adding a NEW camera id to an already-resolved target only
     // resolves that one id, not everything again).
     QMap<QString, QMap<int, camsyringe::ResolvedCameraGeometry>> geometryCache_;
+    // Per-target timestamp of the last time geometryCache_[target] was
+    // populated/refreshed -- by resolveCameraGeometry()'s own automatic
+    // run (see its call site) OR by a "Settings > Camera" dialog's
+    // explicit Read button (see onCameraSettingsTriggered()). Shown at
+    // that dialog's bottom-left; QDateTime() (invalid/default) means
+    // "never read for this target".
+    QMap<QString, QDateTime> geometryReadTimestamps_;
     // Owned directly here (not inside StreamPool) since it's a single,
     // session-wide replay independent of camera count -- BlfReplayer.h's
     // own class comment covers why this needs its own thread the same way
@@ -311,7 +325,9 @@ private:
     QGridLayout* grid_ = nullptr;
     QAction* playPauseAction_ = nullptr;
     QAction* stopAction_ = nullptr;
-    QAction* configureAction_ = nullptr;
+    QMenu* settingsMenu_ = nullptr;
+    QAction* camSyringeSettingsAction_ = nullptr; // "Settings > CamSyringe" -- opens CameraConfigDialog
+    QAction* cameraSettingsAction_ = nullptr;      // "Settings > Camera" -- opens CameraSettingsDialog
     QAction* installInjectorAction_ = nullptr;
     // The status bar (its full width, bottom of the window) shows exactly
     // two visible rectangles, same height, side by side -- but they are

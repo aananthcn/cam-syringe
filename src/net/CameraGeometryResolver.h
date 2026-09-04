@@ -78,11 +78,23 @@ struct ResolvedCameraGeometry {
 class CameraGeometryResolver {
 public:
     using Callback = std::function<void(std::vector<ResolvedCameraGeometry> results)>;
+    // completed: how many of camIds have finished (successfully or not),
+    // including the one that just finished -- 1..camIds.size(). Optional:
+    // this can take anywhere from under a second (declared-XML ids) to
+    // tens of seconds per id (the live-query fallback's worst case, a
+    // cold display-service start), so a caller reading many ids at once
+    // (e.g. CameraSettingsDialog's full 1-16 sweep) needs SOME feedback
+    // that it's still working, not just a single callback at the very
+    // end. Invoked on the SAME background thread as Callback -- same
+    // marshaling requirement.
+    using ProgressCallback = std::function<void(int completed, int total)>;
 
     // camIds: ASCENDING order is the caller's responsibility -- resolution
     // order IS the fallback order (see class comment's step 4).
+    // progressCallback: optional (defaults to a no-op), see its own comment.
     static void resolveAsync(TargetSsh& ssh, QString target, QString sshUser, QString sshKeyPath,
-                              std::vector<int> camIds, Callback callback);
+                              std::vector<int> camIds, Callback callback,
+                              ProgressCallback progressCallback = nullptr);
 };
 
 } // namespace camsyringe

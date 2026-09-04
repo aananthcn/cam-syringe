@@ -20,9 +20,6 @@
 namespace camsyringe::ui {
 
 namespace {
-constexpr int kMinCamId = 1;
-constexpr int kMaxCamId = 16; // this target's allcamtest range, see qcarcam-injector/ARCHITECTURE.md
-
 // Shared across every Browse button in this dialog (all camera rows AND
 // the BLF row) AND across every time Configure is re-opened -- process
 // lifetime, not persisted to disk, so the very first Browse click of a
@@ -55,7 +52,7 @@ CameraConfigDialog::CameraConfigDialog(const QString& initialTarget, int initial
                                         const QMap<int, camsyringe::ResolvedCameraGeometry>& resolvedGeometry,
                                         QWidget* parent)
     : QDialog(parent), resolvedGeometry_(resolvedGeometry) {
-    setWindowTitle(tr("Configure"));
+    setWindowTitle(tr("CamSyringe Configurations"));
 
     auto* rootLayout = new QVBoxLayout(this);
     auto* form = new QFormLayout();
@@ -117,6 +114,18 @@ CameraConfigDialog::CameraConfigDialog(const QString& initialTarget, int initial
 
         rows_[i].pathEdit = new QLineEdit(rows_[i].container);
         rows_[i].pathEdit->setReadOnly(true);
+        // Generous fixed floor, NOT left to sizeHint()/stretch alone --
+        // real report: a QLineEdit's sizeHint() doesn't grow with its
+        // actual text, so this dialog's own one-time widen-by-20% (below,
+        // computed off whatever was on screen AT CONSTRUCTION -- often an
+        // empty path, one visible row) left no real guarantee of enough
+        // room once a real (possibly long) file path got set, especially
+        // with multiple camera rows all needing it at once. Sized off a
+        // realistic long example path, not a raw pixel guess, so it scales
+        // with the actual font/DPI the same way resolvedLabel's fixed
+        // width does below.
+        rows_[i].pathEdit->setMinimumWidth(rows_[i].pathEdit->fontMetrics().horizontalAdvance(
+            tr("/mnt/c/Users/aananth/Videos/camera_footage_3840x2160_30fps.mp4")));
         if (i < initialFiles.size()) {
             rows_[i].pathEdit->setText(initialFiles[i]);
         }
@@ -126,7 +135,7 @@ CameraConfigDialog::CameraConfigDialog(const QString& initialTarget, int initial
 
         auto* camIdLabel = new QLabel(tr("Cam ID:"), rows_[i].container);
         rows_[i].camIdSpin = new QSpinBox(rows_[i].container);
-        rows_[i].camIdSpin->setRange(kMinCamId, kMaxCamId);
+        rows_[i].camIdSpin->setRange(camsyringe::kMinCamId, camsyringe::kMaxCamId);
         // Default 1,2,3,4 for a row with no prior value -- a generic
         // placeholder, not tied to any specific board's actual working
         // ids (those vary per target, see qcarcam-injector's own
@@ -140,7 +149,16 @@ CameraConfigDialog::CameraConfigDialog(const QString& initialTarget, int initial
         // row's CURRENT Cam ID against resolvedGeometry_ (a snapshot
         // from when this dialog was opened -- no live query happens
         // while it's up, see updateResolvedLabel()'s own comment).
+        // Fixed width (sized off the longest text this label ever shows,
+        // "9999x9999 (from another cam)") -- real report: without this,
+        // switching a row's Cam ID to one whose resolved text is longer
+        // (e.g. "3840x2160") visibly shrank pathEdit (the only OTHER
+        // widget in this row with any stretch) to make room, since
+        // nothing here otherwise reserves stable space for this label.
         rows_[i].resolvedLabel = new QLabel(rows_[i].container);
+        rows_[i].resolvedLabel->setFixedWidth(
+            rows_[i].resolvedLabel->fontMetrics().horizontalAdvance(
+                tr("9999x9999 (from another cam)")));
         connect(rows_[i].camIdSpin, QOverload<int>::of(&QSpinBox::valueChanged), this,
                 [this, i](int) { updateResolvedLabel(i); });
 
@@ -198,7 +216,14 @@ CameraConfigDialog::CameraConfigDialog(const QString& initialTarget, int initial
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
     rootLayout->addWidget(buttons);
 
-    updateRowVisibility();
+    updateRowVisibility(); // its own adjustSize() runs first; widen AFTER, so it isn't undone by it
+
+    // 20% wider than this dialog would otherwise be, user-specified --
+    // the natural sizeHint (computed off the longest row's content, e.g.
+    // a video file path) still left the resolution/Cam ID columns
+    // visually cramped against the window's right edge.
+    const QSize hint = sizeHint();
+    resize(static_cast<int>(hint.width() * 1.2), hint.height());
 }
 
 void CameraConfigDialog::onCountChanged(int) { updateRowVisibility(); }

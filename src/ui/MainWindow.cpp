@@ -7,8 +7,10 @@
 #include "net/InjectorBundleInstaller.h"
 #include "net/TcpConnect.h"
 #include "ui/CameraConfigDialog.h"
+#include "ui/CameraSettingsDialog.h"
 #include "ui/CameraWidget.h"
 #include "ui/SshCredentialsDialog.h"
+#include "util/CameraConfigStore.h"
 #include "util/InjectorBundleFinder.h"
 
 #include <QAction>
@@ -33,7 +35,10 @@
 #include <thread>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 
 namespace camsyringe::ui {
 
@@ -76,6 +81,20 @@ constexpr const char* kRemountRw = "mount -uvw /mnt >/dev/null 2>&1";
 // only ever succeeds passwordless for this call.
 bool declineCredentials(const QString&, QString*, QString*) { return false; }
 
+// Opt-in (unset by default -- silent for normal use): prints each
+// refreshShimStatus() attempt's outcome and wall-clock duration to
+// stderr. Added to diagnose a real report of the SHIM/REAL/BLIND
+// indicator staying stuck at BLIND for ~2 minutes after a target came
+// back online, far longer than this function's own ~1s poll interval +
+// ~8-10s worst-case SSH timeout should ever allow -- set
+// CAMSYRINGE_DEBUG_SHIM_STATUS=1 to see exactly where an attempt is
+// actually spending its time (ensureAuth() vs. the status query itself)
+// next time this reproduces.
+bool shimStatusDebugEnabled() {
+    static const bool en = (std::getenv("CAMSYRINGE_DEBUG_SHIM_STATUS") != nullptr);
+    return en;
+}
+
 } // namespace
 
 MainWindow::MainWindow(camsyringe::StreamPool* pool, QString initialTarget, int initialControlPort,
@@ -91,6 +110,13 @@ MainWindow::MainWindow(camsyringe::StreamPool* pool, QString initialTarget, int 
       injectOnly_(initialInjectOnly),
       blfPath_(std::move(initialBlfPath)),
       blfInterface_(std::move(initialBlfInterface)) {
+    // Restores whatever a previous run already read from a target (see
+    // CameraConfigStore's own class comment for the file format/location)
+    // -- otherwise every fresh launch started from a completely empty
+    // geometryCache_/geometryReadTimestamps_ regardless of the target's
+    // own configuration not having changed, a real reported gap.
+    camsyringe::CameraConfigStore::load(&geometryCache_, &geometryReadTimestamps_);
+
     auto* central = new QWidget(this);
     grid_ = new QGridLayout(central);
     setCentralWidget(central);
@@ -102,12 +128,16 @@ MainWindow::MainWindow(camsyringe::StreamPool* pool, QString initialTarget, int 
     stopAction_ = menuBar()->addAction(tr("⏹ Stop"));
     connect(stopAction_, &QAction::triggered, this, &MainWindow::onStopTriggered);
 
-    configureAction_ = menuBar()->addAction(tr("⚙ Configure"));
-    connect(configureAction_, &QAction::triggered, this, &MainWindow::onConfigureTriggered);
+    settingsMenu_ = menuBar()->addMenu(tr("⚙ Settings"));
+    camSyringeSettingsAction_ = settingsMenu_->addAction(tr("Camera Injection"));
+    connect(camSyringeSettingsAction_, &QAction::triggered, this, &MainWindow::onConfigureTriggered);
+    cameraSettingsAction_ = settingsMenu_->addAction(tr("Camera Configs"));
+    connect(cameraSettingsAction_, &QAction::triggered, this, &MainWindow::onCameraSettingsTriggered);
+    cameraSettingsAction_->setEnabled(!currentTarget_.isEmpty());
 
     // Target-maintenance action, independent of Play/Pause/Idle state --
     // enabled whenever a target is configured, not gated to Idle the way
-    // configureAction_ is.
+    // camSyringeSettingsAction_ is.
     installInjectorAction_ = menuBar()->addAction(tr("⇪ Install Injector"));
     connect(installInjectorAction_, &QAction::triggered, this, &MainWindow::onInstallInjectorTriggered);
     installInjectorAction_->setEnabled(!currentTarget_.isEmpty());
@@ -350,19 +380,19 @@ void MainWindow::applyState(PlaybackState state) {
             playPauseAction_->setText(tr("▶ Play"));
             playPauseAction_->setEnabled(pool_->cameraCount() > 0);
             stopAction_->setEnabled(false);
-            configureAction_->setEnabled(true);
+            camSyringeSettingsAction_->setEnabled(true);
             break;
         case PlaybackState::Playing:
             playPauseAction_->setText(tr("⏸ Pause"));
             playPauseAction_->setEnabled(true);
             stopAction_->setEnabled(true);
-            configureAction_->setEnabled(false);
+            camSyringeSettingsAction_->setEnabled(false);
             break;
         case PlaybackState::Paused:
             playPauseAction_->setText(tr("▶ Play"));
             playPauseAction_->setEnabled(true);
             stopAction_->setEnabled(true);
-            configureAction_->setEnabled(false);
+            camSyringeSettingsAction_->setEnabled(false);
             break;
     }
 }
@@ -535,6 +565,7 @@ void MainWindow::resolveCameraGeometry() {
                 this,
                 [this, target, results = std::move(results)]() {
                     QStringList summary;
+                    geometryReadTimestamps_[target] = QDateTime::currentDateTime();
                     for (const auto& r : results) {
                         geometryCache_[target][r.camId] = r;
                         if (!r.ok) {
@@ -567,6 +598,7 @@ void MainWindow::resolveCameraGeometry() {
                         showGeneralStatus(
                             tr("Camera resolution: %1").arg(summary.join(QStringLiteral("; "))));
                     }
+                    camsyringe::CameraConfigStore::save(geometryCache_, geometryReadTimestamps_);
                 },
                 Qt::QueuedConnection);
         });
@@ -798,6 +830,7 @@ void MainWindow::onConfigureTriggered() {
 
     currentTarget_ = dialog.target();
     installInjectorAction_->setEnabled(!currentTarget_.isEmpty());
+    cameraSettingsAction_->setEnabled(!currentTarget_.isEmpty());
     controlPort_ = dialog.controlPort();
     sshUser_ = dialog.sshUser();
     sshKeyPath_ = dialog.sshKeyPath();
@@ -842,6 +875,49 @@ void MainWindow::onConfigureTriggered() {
     rebuildGrid();
     applyState(PlaybackState::Idle);
     resolveCameraGeometry();
+}
+
+void MainWindow::onCameraSettingsTriggered() {
+    if (currentTarget_.isEmpty()) {
+        return; // defensive; disabled without a target anyway
+    }
+
+    // Every QCarCam id the chip can address over GMSL2 (camsyringe::
+    // kMinCamId/kMaxCamId, 1-16) -- deliberately NOT just pool_'s
+    // currently-configured injection camera ids. Explicit requirement:
+    // this dialog reads the target's real configuration for every camera
+    // the hardware could have, not only whichever ones this session
+    // happens to be injecting into right now.
+    std::vector<int> camIds;
+    camIds.reserve(camsyringe::kMaxCamId - camsyringe::kMinCamId + 1);
+    for (int id = camsyringe::kMinCamId; id <= camsyringe::kMaxCamId; ++id) {
+        camIds.push_back(id);
+    }
+
+    ui::CameraSettingsDialog dialog(sshSession_, currentTarget_, sshUser_, sshKeyPath_,
+                                     std::move(camIds), geometryCache_.value(currentTarget_),
+                                     geometryReadTimestamps_.value(currentTarget_), this);
+    // Folds a fresh Read back into MainWindow's own cache/timestamp (same
+    // storage resolveCameraGeometry() populates) so it benefits a later
+    // Configure/Play too, not just this dialog's own table.
+    connect(&dialog, &ui::CameraSettingsDialog::geometryResolved, this,
+            [this](const QString& target, const std::vector<camsyringe::ResolvedCameraGeometry>& results,
+                   const QDateTime& when) {
+                geometryReadTimestamps_[target] = when;
+                for (const auto& r : results) {
+                    geometryCache_[target][r.camId] = r;
+                    if (r.ok && target == currentTarget_) {
+                        for (size_t i = 0; i < pool_->cameraCount(); ++i) {
+                            if (pool_->configAt(i).camId == r.camId) {
+                                pool_->setTargetGeometry(i, static_cast<int>(r.width),
+                                                          static_cast<int>(r.height));
+                            }
+                        }
+                    }
+                }
+                camsyringe::CameraConfigStore::save(geometryCache_, geometryReadTimestamps_);
+            });
+    dialog.exec();
 }
 
 void MainWindow::onInstallInjectorTriggered() {
@@ -1091,6 +1167,10 @@ void MainWindow::applyShimState(ShimState state) {
 
 void MainWindow::refreshShimStatus() {
     if (currentTarget_.isEmpty() || shimBusy_) {
+        if (shimStatusDebugEnabled()) {
+            std::fprintf(stderr, "[shimstatus] tick skipped (target empty=%d, busy=%d)\n",
+                         currentTarget_.isEmpty() ? 1 : 0, shimBusy_ ? 1 : 0);
+        }
         return;
     }
     shimBusy_ = true;
@@ -1098,22 +1178,42 @@ void MainWindow::refreshShimStatus() {
     QString sshUser = sshUser_;
     QString sshKeyPath = sshKeyPath_;
     std::thread([this, target, sshUser, sshKeyPath]() {
+        const bool debug = shimStatusDebugEnabled();
+        const auto t0 = std::chrono::steady_clock::now();
         ShimState result = ShimState::Blind;
         // declineCredentials, not the real prompt -- see this function's
         // own header comment.
-        if (sshSession_.ensureAuth(target, sshUser, sshKeyPath, declineCredentials)) {
+        const bool authed = sshSession_.ensureAuth(target, sshUser, sshKeyPath, declineCredentials);
+        const auto t1 = std::chrono::steady_clock::now();
+        bool queryOk = false;
+        QString queryOut;
+        if (authed) {
             auto res = sshSession_.run(
                 target,
                 QString("test -e %1 && echo SHIM || echo REAL").arg(kRealLibBackupPath),
                 5000);
-            if (res.ok()) {
-                QString out = res.stdOut.trimmed();
-                if (out == "SHIM") {
+            queryOk = res.ok();
+            queryOut = res.stdOut.trimmed();
+            if (queryOk) {
+                if (queryOut == "SHIM") {
                     result = ShimState::Shim;
-                } else if (out == "REAL") {
+                } else if (queryOut == "REAL") {
                     result = ShimState::Real;
                 }
             }
+        }
+        if (debug) {
+            const auto t2 = std::chrono::steady_clock::now();
+            auto ms = [](auto a, auto b) -> long long {
+                return std::chrono::duration_cast<std::chrono::milliseconds>(b - a).count();
+            };
+            std::fprintf(stderr,
+                         "[shimstatus] target=%s ensureAuth=%s (%lldms) query=%s out=\"%s\" "
+                         "(%lldms) total=%lldms -> %s\n",
+                         target.toUtf8().constData(), authed ? "ok" : "FAILED", ms(t0, t1),
+                         authed ? (queryOk ? "ok" : "FAILED") : "skipped",
+                         queryOut.toUtf8().constData(), authed ? ms(t1, t2) : 0, ms(t0, t2),
+                         result == ShimState::Shim ? "SHIM" : result == ShimState::Real ? "REAL" : "BLIND");
         }
         QMetaObject::invokeMethod(
             this,

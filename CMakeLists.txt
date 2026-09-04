@@ -87,7 +87,9 @@ add_executable(camsyringe
     src/ui/MainWindow.cpp
     src/ui/CameraWidget.cpp
     src/ui/CameraConfigDialog.cpp
+    src/ui/CameraSettingsDialog.cpp
     src/ui/SshCredentialsDialog.cpp
+    src/util/CameraConfigStore.cpp
     src/util/InjectorBundleFinder.cpp
 )
 
