@@ -76,6 +76,7 @@ add_executable(camsyringe
     src/blf/BlfReplayer.cpp
     src/camera/CameraStream.cpp
     src/camera/StreamPool.cpp
+    src/net/CameraGeometryResolver.cpp
     src/net/DispatcherClient.cpp
     src/net/DispatcherRemoteControl.cpp
     src/net/DispatcherVersionProbe.cpp

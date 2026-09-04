@@ -57,11 +57,11 @@ Camera streaming and everything else works fine without this; it's only needed i
 
 ```
 ./camsyringe [--target [user@]<target>] [--control-port N] [--cam-ids IDS] [--playall]
-             [--inject-only] [--qcx-bypass] [--blf-file PATH] [--blf-interface IFACE]
+             [--inject-only] [--blf-file PATH] [--blf-interface IFACE]
              [<video1> [<video2> <video3> <video4>]]
 ```
 
-Every argument is optional, EXCEPT `--cam-ids`, which becomes required the moment any video files are given (comma-separated QCarCam ids, same order as the video files — a dash within one entry expands to an inclusive range, e.g. `1-3,8` means `1,2,3,8`; each id must be unique). Ports are assigned automatically in order: 5004, 5006, 5008, 5010. `--target` defaults to `192.168.1.1`; an optional `user@` prefix is accepted (and ignored) so you can paste the same address you SSH to the target with. `--control-port` (default 5000) is `qcarcam_dispatcher`'s control-channel port on the target. `--inject-only`/`--qcx-bypass` are forwarded to the target's declaration (see `qcarcam-injector`'s own `ARCHITECTURE.md` items 29-31 for what each does). `--blf-file`/`--blf-interface` enable BLF/Ethernet replay (see below). Run with no arguments at all and the window opens with the **Configure** dialog already up, so you can set everything from the UI instead. `--playall` starts streaming immediately on launch instead of waiting for a Play click — it requires at least one video file also be given.
+Every argument is optional, EXCEPT `--cam-ids`, which becomes required the moment any video files are given (comma-separated QCarCam ids, same order as the video files — a dash within one entry expands to an inclusive range, e.g. `1-3,8` means `1,2,3,8`; each id must be unique). Ports are assigned automatically in order: 5004, 5006, 5008, 5010. `--target` defaults to `192.168.1.1`; an optional `user@` prefix is accepted (and ignored) so you can paste the same address you SSH to the target with. `--control-port` (default 5000) is `qcarcam_dispatcher`'s control-channel port on the target. `--inject-only` is forwarded to the target's declaration (see `qcarcam-injector`'s own `ARCHITECTURE.md` items 29-31 for what it does). `--blf-file`/`--blf-interface` enable BLF/Ethernet replay (see below). Run with no arguments at all and the window opens with the **Configure** dialog already up, so you can set everything from the UI instead. `--playall` starts streaming immediately on launch instead of waiting for a Play click — it requires at least one video file also be given.
 
 Examples:
 
@@ -75,7 +75,7 @@ Examples:
 The menu bar has three controls:
 - **▶ Play / ⏸ Pause** — starts everything (camera streams AND BLF replay, if configured) immediately, THEN asynchronously declares each camera to the target's `qcarcam_dispatcher` — see `CONTEXT.md`'s "Target-side coordination" section for why streaming can't wait on that response first (it would deadlock). Pausing leaves each tile's last frame on screen and closes the target control connection (the target's teardown signal); pressing Play again restarts fresh (there's no true pause/resume, just stop-and-restart) and re-declares.
 - **⏹ Stop** — fully stops everything and resets every tile back to its idle placeholder.
-- **⚙ Configure** — the single dialog for all session settings: target, control port, number of cameras (1-4) with each one's video file + QCarCam id, `--inject-only`/`--qcx-bypass`, and BLF file + network interface. Only enabled while stopped (`Idle` state) — greyed out during both Play and Pause, since changing settings mid-stream isn't supported.
+- **⚙ Configure** — the single dialog for all session settings: target, control port, number of cameras (1-4) with each one's video file + QCarCam id, `--inject-only`, and BLF file + network interface. Only enabled while stopped (`Idle` state) — greyed out during both Play and Pause, since changing settings mid-stream isn't supported.
 
 Each camera input can be any video file libavformat can decode; every camera is independently re-encoded (not remuxed) to zero-latency H.264, scaled down (never up) to fit within 1920x1080, matching what the target's hardware decoder pipeline expects, and looped indefinitely while playing. A camera the target rejects (wrong/unconfigured QCarCam id) shows an error on just its own tile but keeps streaming locally — the others are unaffected.
 

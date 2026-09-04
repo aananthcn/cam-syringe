@@ -16,6 +16,13 @@ void StreamPool::setEnabled(size_t index, bool enabled) {
     }
 }
 
+void StreamPool::setTargetGeometry(size_t index, int width, int height) {
+    if (index < cameras_.size()) {
+        cameras_[index].config.targetWidth = width;
+        cameras_[index].config.targetHeight = height;
+    }
+}
+
 void StreamPool::setPreviewCallback(PreviewCallback callback) {
     previewCallback_ = std::move(callback);
 }
@@ -30,8 +37,9 @@ size_t StreamPool::startAll() {
         if (!entry.enabled) {
             continue; // e.g. target rejected this camera's control-channel declaration
         }
-        entry.stream = std::make_unique<CameraStream>(entry.config.inputPath, entry.config.destUrl,
-                                                        entry.config.label, entry.config.index);
+        entry.stream = std::make_unique<CameraStream>(
+            entry.config.inputPath, entry.config.destUrl, entry.config.label, entry.config.index,
+            entry.config.targetWidth, entry.config.targetHeight);
 
         const int idx = entry.config.index;
         if (previewCallback_) {

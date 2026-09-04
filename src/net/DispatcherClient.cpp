@@ -18,7 +18,7 @@ DispatcherClient::~DispatcherClient() { disconnect(); }
 
 void DispatcherClient::declareAsync(std::string target, int controlPort,
                                      std::vector<CameraDeclaration> cameras, bool injectOnly,
-                                     bool qcxBypass, DeclareCallback callback) {
+                                     DeclareCallback callback) {
     // Self-cleaning: joins any previous session's thread first (whether it
     // finished on its own after a connect failure, or is still holding a
     // connection open) -- assigning a new std::thread over a still-
@@ -26,7 +26,7 @@ void DispatcherClient::declareAsync(std::string target, int controlPort,
     // don't need to remember to call disconnect() themselves between uses.
     disconnect();
     thread_ = std::thread(&DispatcherClient::threadFunc, this, std::move(target), controlPort,
-                           std::move(cameras), injectOnly, qcxBypass, std::move(callback));
+                           std::move(cameras), injectOnly, std::move(callback));
 }
 
 void DispatcherClient::disconnect() {
@@ -49,7 +49,7 @@ void DispatcherClient::disconnect() {
 
 void DispatcherClient::threadFunc(std::string target, int controlPort,
                                    std::vector<CameraDeclaration> cameras, bool injectOnly,
-                                   bool qcxBypass, DeclareCallback callback) {
+                                   DeclareCallback callback) {
     // 8s is generous for a LAN target, short enough for prompt UI feedback.
     std::string connectErr;
     int fd = connectWithTimeout(target, controlPort, 8, &connectErr);
@@ -63,11 +63,8 @@ void DispatcherClient::threadFunc(std::string target, int controlPort,
     for (const auto& cam : cameras) {
         declaration += "CAM " + std::to_string(cam.camId) + " " + std::to_string(cam.port) + "\n";
     }
-    if (injectOnly || qcxBypass) {
-        declaration += "FLAGS";
-        if (injectOnly) declaration += " --inject-only";
-        if (qcxBypass) declaration += " --qcx-bypass";
-        declaration += "\n";
+    if (injectOnly) {
+        declaration += "FLAGS --inject-only\n";
     }
     declaration += "END\n";
 

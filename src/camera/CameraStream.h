@@ -57,7 +57,15 @@ public:
                                               int strideBytes)>;
     using ErrorCallback = std::function<void(const std::string& message)>;
 
-    CameraStream(std::string inputPath, std::string destUrl, std::string label = {}, int index = 0);
+    // forcedWidth/forcedHeight (both 0 by default): the real, target-
+    // authored resolution to match EXACTLY (see
+    // CameraConfig::targetWidth/Height and net/CameraGeometryResolver.h)
+    // -- 0/0 keeps today's cap-only behavior (computeOutputSize() in the
+    // .cpp). When set, open() letterboxes the source into a canvas of
+    // exactly this size instead (see contentWidth_/Height_ and their own
+    // comment).
+    CameraStream(std::string inputPath, std::string destUrl, std::string label = {}, int index = 0,
+                 int forcedWidth = 0, int forcedHeight = 0);
     ~CameraStream();
 
     CameraStream(const CameraStream&) = delete;
@@ -119,6 +127,21 @@ private:
     int videoStreamIndex_ = -1;
     int outWidth_ = 0;
     int outHeight_ = 0;
+    // forcedWidth_/forcedHeight_: constructor input, see its own comment.
+    int forcedWidth_ = 0;
+    int forcedHeight_ = 0;
+    // The scaled SOURCE content's own sub-rectangle within the full
+    // outWidth_ x outHeight_ canvas -- equal to the whole canvas
+    // (contentOffsetX_/Y_ == 0) when forcedWidth_/Height_ is 0 (today's
+    // unchanged behavior). When forced, this preserves the source's own
+    // aspect ratio (may scale UP, unlike computeOutputSize()'s
+    // shrink-only cap) and is centered within the canvas, whose margins
+    // are filled once with letterbox black (see run()'s own comment) --
+    // an exact target match without distorting/stretching the source.
+    int contentWidth_ = 0;
+    int contentHeight_ = 0;
+    int contentOffsetX_ = 0;
+    int contentOffsetY_ = 0;
 
     int64_t streamStartNs_ = 0;
     std::atomic<bool> startOriginSet_{false};

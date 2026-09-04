@@ -26,6 +26,17 @@ struct CameraConfig {
     // either field.
     int camId = 0;
     int port = 0;
+    // The real, target-authored resolution this camera's real vehicle
+    // camera/panel actually expects for camId (see
+    // net/CameraGeometryResolver.h) -- 0/0 means "not resolved yet, or
+    // discovery failed" -- CameraStream then falls back to its own
+    // cap-only behavior (see CameraStream.cpp's computeOutputSize()) as
+    // before this existed. When non-zero, CameraStream resizes EXACTLY
+    // to this size (letterboxed, not stretched) instead of just capping
+    // an oversized source -- required for at least one real camera ID's
+    // display pipe, confirmed live to support no scaling at all.
+    int targetWidth = 0;
+    int targetHeight = 0;
 };
 
 // Qt-free: owns N CameraStream instances, each running on its own
@@ -60,6 +71,15 @@ public:
     // camera mapping never shifts. Every camera defaults to enabled; a
     // fresh addCamera() (e.g. after clearCameras()) resets to enabled too.
     void setEnabled(size_t index, bool enabled);
+
+    // Updates camera `index`'s CameraConfig::targetWidth/Height in place
+    // (see their own comment) -- e.g. MainWindow applying a
+    // CameraGeometryResolver result that only became available after
+    // this camera was already added. Takes effect on the NEXT startAll()
+    // (CameraStream is constructed fresh there each time, see
+    // StreamPool.cpp) -- safe to call regardless of running state, same
+    // convention as setEnabled().
+    void setTargetGeometry(size_t index, int width, int height);
 
     using PreviewCallback =
         std::function<void(int index, const uint8_t* rgbData, int width, int height, int strideBytes)>;
