@@ -20,9 +20,6 @@
 namespace camsyringe::ui {
 
 namespace {
-constexpr int kMinCamId = 1;
-constexpr int kMaxCamId = 16; // this target's allcamtest range, see qcarcam-injector/ARCHITECTURE.md
-
 // Shared across every Browse button in this dialog (all camera rows AND
 // the BLF row) AND across every time Configure is re-opened -- process
 // lifetime, not persisted to disk, so the very first Browse click of a
@@ -50,10 +47,12 @@ CameraConfigDialog::CameraConfigDialog(const QString& initialTarget, int initial
                                         const QString& initialSshUser, const QString& initialSshKeyPath,
                                         const QStringList& initialFiles,
                                         const std::vector<int>& initialCamIds, bool initialInjectOnly,
-                                        bool initialQcxBypass, const QString& initialBlfPath,
-                                        const QString& initialBlfInterface, QWidget* parent)
-    : QDialog(parent) {
-    setWindowTitle(tr("Configure"));
+                                        const QString& initialBlfPath,
+                                        const QString& initialBlfInterface,
+                                        const QMap<int, camsyringe::ResolvedCameraGeometry>& resolvedGeometry,
+                                        QWidget* parent)
+    : QDialog(parent), resolvedGeometry_(resolvedGeometry) {
+    setWindowTitle(tr("CamSyringe Configurations"));
 
     auto* rootLayout = new QVBoxLayout(this);
     auto* form = new QFormLayout();
@@ -73,14 +72,10 @@ CameraConfigDialog::CameraConfigDialog(const QString& initialTarget, int initial
     connect(countSpin_, QOverload<int>::of(&QSpinBox::valueChanged), this,
             &CameraConfigDialog::onCountChanged);
 
-    targetEdit_ = new QLineEdit(initialTarget, this);
-    form->addRow(tr("Target:"), targetEdit_);
-
-    controlPortSpin_ = new QSpinBox(this);
-    controlPortSpin_->setRange(1, 65535);
-    controlPortSpin_->setValue(initialControlPort);
-    form->addRow(tr("Control port:"), controlPortSpin_);
-
+    // SSH user/key deliberately come BEFORE Target (user-specified
+    // reordering) -- everything else below still reads top-to-bottom the
+    // same way, this pair just moved as a unit.
+    //
     // Everything CamSyringe does over SSH against `target` (install,
     // Play-time dispatcher-start retry, Stop's target-process kill) uses
     // this as the username to try passwordless first -- see
@@ -104,6 +99,14 @@ CameraConfigDialog::CameraConfigDialog(const QString& initialTarget, int initial
     sshKeyRowLayout->addWidget(sshKeyBrowseButton_);
     form->addRow(tr("SSH key (optional):"), sshKeyRow);
 
+    targetEdit_ = new QLineEdit(initialTarget, this);
+    form->addRow(tr("Target:"), targetEdit_);
+
+    controlPortSpin_ = new QSpinBox(this);
+    controlPortSpin_->setRange(1, 65535);
+    controlPortSpin_->setValue(initialControlPort);
+    form->addRow(tr("Control port:"), controlPortSpin_);
+
     for (int i = 0; i < camsyringe::kMaxCameras; ++i) {
         rows_[i].container = new QWidget(this);
         auto* rowLayout = new QHBoxLayout(rows_[i].container);
@@ -111,6 +114,18 @@ CameraConfigDialog::CameraConfigDialog(const QString& initialTarget, int initial
 
         rows_[i].pathEdit = new QLineEdit(rows_[i].container);
         rows_[i].pathEdit->setReadOnly(true);
+        // Generous fixed floor, NOT left to sizeHint()/stretch alone --
+        // real report: a QLineEdit's sizeHint() doesn't grow with its
+        // actual text, so this dialog's own one-time widen-by-20% (below,
+        // computed off whatever was on screen AT CONSTRUCTION -- often an
+        // empty path, one visible row) left no real guarantee of enough
+        // room once a real (possibly long) file path got set, especially
+        // with multiple camera rows all needing it at once. Sized off a
+        // realistic long example path, not a raw pixel guess, so it scales
+        // with the actual font/DPI the same way resolvedLabel's fixed
+        // width does below.
+        rows_[i].pathEdit->setMinimumWidth(rows_[i].pathEdit->fontMetrics().horizontalAdvance(
+            tr("/mnt/c/Users/aananth/Videos/camera_footage_3840x2160_30fps.mp4")));
         if (i < initialFiles.size()) {
             rows_[i].pathEdit->setText(initialFiles[i]);
         }
@@ -120,7 +135,7 @@ CameraConfigDialog::CameraConfigDialog(const QString& initialTarget, int initial
 
         auto* camIdLabel = new QLabel(tr("Cam ID:"), rows_[i].container);
         rows_[i].camIdSpin = new QSpinBox(rows_[i].container);
-        rows_[i].camIdSpin->setRange(kMinCamId, kMaxCamId);
+        rows_[i].camIdSpin->setRange(camsyringe::kMinCamId, camsyringe::kMaxCamId);
         // Default 1,2,3,4 for a row with no prior value -- a generic
         // placeholder, not tied to any specific board's actual working
         // ids (those vary per target, see qcarcam-injector's own
@@ -129,12 +144,32 @@ CameraConfigDialog::CameraConfigDialog(const QString& initialTarget, int initial
                                           ? initialCamIds[static_cast<size_t>(i)]
                                           : i + 1);
 
+        // Read-only, purely informational -- shows what
+        // MainWindow::resolveCameraGeometry() already found for this
+        // row's CURRENT Cam ID against resolvedGeometry_ (a snapshot
+        // from when this dialog was opened -- no live query happens
+        // while it's up, see updateResolvedLabel()'s own comment).
+        // Fixed width (sized off the longest text this label ever shows,
+        // "9999x9999 (from another cam)") -- real report: without this,
+        // switching a row's Cam ID to one whose resolved text is longer
+        // (e.g. "3840x2160") visibly shrank pathEdit (the only OTHER
+        // widget in this row with any stretch) to make room, since
+        // nothing here otherwise reserves stable space for this label.
+        rows_[i].resolvedLabel = new QLabel(rows_[i].container);
+        rows_[i].resolvedLabel->setFixedWidth(
+            rows_[i].resolvedLabel->fontMetrics().horizontalAdvance(
+                tr("9999x9999 (from another cam)")));
+        connect(rows_[i].camIdSpin, QOverload<int>::of(&QSpinBox::valueChanged), this,
+                [this, i](int) { updateResolvedLabel(i); });
+
         rowLayout->addWidget(rows_[i].pathEdit, /*stretch=*/1);
         rowLayout->addWidget(rows_[i].browseButton);
         rowLayout->addWidget(camIdLabel);
         rowLayout->addWidget(rows_[i].camIdSpin);
+        rowLayout->addWidget(rows_[i].resolvedLabel);
 
         form->addRow(tr("Camera %1 video:").arg(i), rows_[i].container);
+        updateResolvedLabel(i);
     }
 
     injectOnlyCheck_ = new QCheckBox(
@@ -142,13 +177,6 @@ CameraConfigDialog::CameraConfigDialog(const QString& initialTarget, int initial
         this);
     injectOnlyCheck_->setChecked(initialInjectOnly);
     rootLayout->addWidget(injectOnlyCheck_);
-
-    qcxBypassCheck_ =
-        new QCheckBox(tr("QCX bypass (diagnostic -- skip qcxserver entirely on target, see "
-                          "qcarcam_injector's --qcx-bypass)"),
-                      this);
-    qcxBypassCheck_->setChecked(initialQcxBypass);
-    rootLayout->addWidget(qcxBypassCheck_);
 
     // Phase 3: BLF/Ethernet replay -- session-wide, not per-camera (one
     // BLF file replayed over one network interface, independent of how
@@ -188,10 +216,36 @@ CameraConfigDialog::CameraConfigDialog(const QString& initialTarget, int initial
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
     rootLayout->addWidget(buttons);
 
-    updateRowVisibility();
+    updateRowVisibility(); // its own adjustSize() runs first; widen AFTER, so it isn't undone by it
+
+    // 20% wider than this dialog would otherwise be, user-specified --
+    // the natural sizeHint (computed off the longest row's content, e.g.
+    // a video file path) still left the resolution/Cam ID columns
+    // visually cramped against the window's right edge.
+    const QSize hint = sizeHint();
+    resize(static_cast<int>(hint.width() * 1.2), hint.height());
 }
 
 void CameraConfigDialog::onCountChanged(int) { updateRowVisibility(); }
+
+void CameraConfigDialog::updateResolvedLabel(int row) {
+    int camId = rows_[row].camIdSpin->value();
+    auto it = resolvedGeometry_.find(camId);
+    if (it == resolvedGeometry_.end()) {
+        rows_[row].resolvedLabel->setText(tr("(unresolved)"));
+        rows_[row].resolvedLabel->setStyleSheet(QStringLiteral("color: gray;"));
+        return;
+    }
+    if (!it->ok) {
+        rows_[row].resolvedLabel->setText(tr("unknown"));
+        rows_[row].resolvedLabel->setStyleSheet(QStringLiteral("color: gray;"));
+        return;
+    }
+    rows_[row].resolvedLabel->setStyleSheet(QString());
+    rows_[row].resolvedLabel->setText(it->wasFallback
+                                           ? tr("%1x%2 (from another cam)").arg(it->width).arg(it->height)
+                                           : tr("%1x%2").arg(it->width).arg(it->height));
+}
 
 void CameraConfigDialog::updateRowVisibility() {
     const int count = countSpin_->value();
@@ -317,8 +371,6 @@ std::vector<int> CameraConfigDialog::camIds() const {
 }
 
 bool CameraConfigDialog::injectOnly() const { return injectOnlyCheck_->isChecked(); }
-
-bool CameraConfigDialog::qcxBypass() const { return qcxBypassCheck_->isChecked(); }
 
 QString CameraConfigDialog::blfPath() const {
     return blfEnabledCheck_->isChecked() ? blfPathEdit_->text().trimmed() : QString();

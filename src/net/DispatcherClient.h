@@ -72,7 +72,7 @@ public:
 
     // Connects to target:controlPort, sends one "CAM <id> <port>" line per
     // entry in `cameras` plus an optional "FLAGS ..." line (only emitted
-    // if injectOnly or qcxBypass is true) then "END", reads lines until
+    // if injectOnly is true) then "END", reads lines until
     // DONE (READY/ERROR lines collected into outcomes, PREVIEW_ERROR
     // lines into previewIssues -- see PreviewIssue's own comment; any
     // other/unrecognized line is ignored, forward-compatible with a
@@ -84,7 +84,7 @@ public:
     // second declaration while one is already active/connected is not
     // supported).
     void declareAsync(std::string target, int controlPort, std::vector<CameraDeclaration> cameras,
-                       bool injectOnly, bool qcxBypass, DeclareCallback callback);
+                       bool injectOnly, DeclareCallback callback);
 
     // True once a previous declareAsync() has connected and is still
     // holding that connection open (Playing or Paused -- see class
@@ -104,7 +104,7 @@ public:
 
 private:
     void threadFunc(std::string target, int controlPort, std::vector<CameraDeclaration> cameras,
-                     bool injectOnly, bool qcxBypass, DeclareCallback callback);
+                     bool injectOnly, DeclareCallback callback);
 
     std::thread thread_;
     // Set once the socket is created (even before connect() completes) so

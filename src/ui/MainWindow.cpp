@@ -7,16 +7,21 @@
 #include "net/InjectorBundleInstaller.h"
 #include "net/TcpConnect.h"
 #include "ui/CameraConfigDialog.h"
+#include "ui/CameraSettingsDialog.h"
 #include "ui/CameraWidget.h"
 #include "ui/SshCredentialsDialog.h"
+#include "util/CameraConfigStore.h"
 #include "util/InjectorBundleFinder.h"
 
 #include <QAction>
 #include <QCloseEvent>
 #include <QDir>
+#include <QEvent>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFontMetrics>
 #include <QGridLayout>
+#include <QLabel>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
@@ -29,7 +34,11 @@
 
 #include <thread>
 
+#include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 
 namespace camsyringe::ui {
 
@@ -44,11 +53,53 @@ QString portFromDestUrl(const std::string& destUrl) {
     return QString::fromStdString(destUrl.substr(pos + 1));
 }
 
+// See qcarcam-injector/ARCHITECTURE.md item 37 for the target-side
+// contract these constants/helpers encode.
+constexpr const char* kRealLibPath = "/mnt/lib64/camera/libqcxclient.so";
+constexpr const char* kRealLibBackupPath = "/mnt/lib64/camera/libqcxclient.so.real";
+// Where the ONE injector bundle (create-qcarcam-inj-bundle.sh) already
+// installs the shim on the target, alongside the real binaries --
+// InjectorBundleInstaller's existing /var/opt convention (see its own
+// "rm -rf /var/opt/bin /var/opt/lib /var/opt/include" comment). The
+// REAL->SHIM toggle direction copies FROM here, entirely on the target's
+// own filesystem -- explicitly no PC<->target file transfer of any kind
+// during a toggle (an earlier revision did its own separate PC-side
+// discovery + scp of a loose file; removed per explicit direction: the
+// shim should travel ONLY as part of the one bundle install, not via a
+// second, independent delivery path).
+constexpr const char* kShimOnTargetPath = "/var/opt/lib/libqcxclient_shim.so";
+// Distinguishes "the bundle was never installed here" from a generic SSH
+// failure in the toggle's own result handling below -- see there.
+constexpr const char* kShimMissingMarker = "CAMSYRINGE_SHIM_NOT_INSTALLED";
+// Idempotent -- confirmed live on the real target that /mnt is mount-flag
+// read-only (not verity-protected) and this always succeeds; safe to
+// prefix onto every toggle rather than tracking mount state separately.
+constexpr const char* kRemountRw = "mount -uvw /mnt >/dev/null 2>&1";
+
+// refreshShimStatus() must NEVER itself prompt for credentials -- see its
+// own header comment for why. Declining unconditionally means ensureAuth()
+// only ever succeeds passwordless for this call.
+bool declineCredentials(const QString&, QString*, QString*) { return false; }
+
+// Opt-in (unset by default -- silent for normal use): prints each
+// refreshShimStatus() attempt's outcome and wall-clock duration to
+// stderr. Added to diagnose a real report of the SHIM/REAL/BLIND
+// indicator staying stuck at BLIND for ~2 minutes after a target came
+// back online, far longer than this function's own ~1s poll interval +
+// ~8-10s worst-case SSH timeout should ever allow -- set
+// CAMSYRINGE_DEBUG_SHIM_STATUS=1 to see exactly where an attempt is
+// actually spending its time (ensureAuth() vs. the status query itself)
+// next time this reproduces.
+bool shimStatusDebugEnabled() {
+    static const bool en = (std::getenv("CAMSYRINGE_DEBUG_SHIM_STATUS") != nullptr);
+    return en;
+}
+
 } // namespace
 
 MainWindow::MainWindow(camsyringe::StreamPool* pool, QString initialTarget, int initialControlPort,
                         QString initialSshUser, QString initialSshKeyPath, bool initialInjectOnly,
-                        bool initialQcxBypass, QString initialBlfPath, QString initialBlfInterface,
+                        QString initialBlfPath, QString initialBlfInterface,
                         bool startImmediately, QWidget* parent)
     : QMainWindow(parent),
       pool_(pool),
@@ -57,9 +108,15 @@ MainWindow::MainWindow(camsyringe::StreamPool* pool, QString initialTarget, int 
       sshUser_(std::move(initialSshUser)),
       sshKeyPath_(std::move(initialSshKeyPath)),
       injectOnly_(initialInjectOnly),
-      qcxBypass_(initialQcxBypass),
       blfPath_(std::move(initialBlfPath)),
       blfInterface_(std::move(initialBlfInterface)) {
+    // Restores whatever a previous run already read from a target (see
+    // CameraConfigStore's own class comment for the file format/location)
+    // -- otherwise every fresh launch started from a completely empty
+    // geometryCache_/geometryReadTimestamps_ regardless of the target's
+    // own configuration not having changed, a real reported gap.
+    camsyringe::CameraConfigStore::load(&geometryCache_, &geometryReadTimestamps_);
+
     auto* central = new QWidget(this);
     grid_ = new QGridLayout(central);
     setCentralWidget(central);
@@ -71,12 +128,16 @@ MainWindow::MainWindow(camsyringe::StreamPool* pool, QString initialTarget, int 
     stopAction_ = menuBar()->addAction(tr("⏹ Stop"));
     connect(stopAction_, &QAction::triggered, this, &MainWindow::onStopTriggered);
 
-    configureAction_ = menuBar()->addAction(tr("⚙ Configure"));
-    connect(configureAction_, &QAction::triggered, this, &MainWindow::onConfigureTriggered);
+    settingsMenu_ = menuBar()->addMenu(tr("⚙ Settings"));
+    camSyringeSettingsAction_ = settingsMenu_->addAction(tr("Camera Injection"));
+    connect(camSyringeSettingsAction_, &QAction::triggered, this, &MainWindow::onConfigureTriggered);
+    cameraSettingsAction_ = settingsMenu_->addAction(tr("Camera Configs"));
+    connect(cameraSettingsAction_, &QAction::triggered, this, &MainWindow::onCameraSettingsTriggered);
+    cameraSettingsAction_->setEnabled(!currentTarget_.isEmpty());
 
     // Target-maintenance action, independent of Play/Pause/Idle state --
     // enabled whenever a target is configured, not gated to Idle the way
-    // configureAction_ is.
+    // camSyringeSettingsAction_ is.
     installInjectorAction_ = menuBar()->addAction(tr("⇪ Install Injector"));
     connect(installInjectorAction_, &QAction::triggered, this, &MainWindow::onInstallInjectorTriggered);
     installInjectorAction_->setEnabled(!currentTarget_.isEmpty());
@@ -85,19 +146,171 @@ MainWindow::MainWindow(camsyringe::StreamPool* pool, QString initialTarget, int 
     QAction* aboutAction = helpMenu->addAction(tr("About"));
     connect(aboutAction, &QAction::triggered, this, &MainWindow::onAboutTriggered);
 
-    // Bottom of the main window (status bar), permanent widget so it sits
-    // to the right of showMessage()'s own text instead of being replaced
-    // by it -- hidden except during an active install, see
-    // runInjectorInstall()'s progress callback.
-    installProgressBar_ = new QProgressBar(this);
-    installProgressBar_->setFixedWidth(160);
+    // Bottom of the main window: a long, fixed-height status bar rectangle
+    // (standard text height + a few px of top/bottom padding, NOT
+    // whatever height its content happens to want -- otherwise it visibly
+    // changes height between "empty", "showing a message", and "showing
+    // the progress bar", which is what a plain default QStatusBar does).
+    // Split into exactly two visible boxes, same height, side by side:
+    // generalStatusLabel_ (left, stretches with the window) and
+    // statusIndicatorArea_ (right, fixed width) -- see each one's own
+    // header comment.
+    const QFontMetrics fm = fontMetrics();
+    const int kStatusBarVPadding = 4;  // "standard text size + a few pixels" -- user-specified
+    const int statusBarHeight = fm.height() + 2 * kStatusBarVPadding;
+    // Full status bar height, not shorter -- user-specified: the
+    // shim/deploy rectangle (statusIndicatorArea_) must be exactly as
+    // tall as its parent (QStatusBar). An earlier revision shrank this by
+    // 2px so each box's own border wouldn't touch the bar's top/bottom
+    // edge -- no longer needed now that generalStatusLabel_ draws no
+    // border of its own (see showGeneralStatus()'s own comment); left in
+    // by then-stale habit, which is exactly what made statusIndicatorArea_
+    // visibly short of the bar's own top/bottom edge (confirmed via
+    // screenshot) even though nothing needed it to be anymore.
+    const int boxHeight = statusBarHeight;
+    statusBar()->setFixedHeight(statusBarHeight);
+    // No size grip in the corner -- it would otherwise claim the exact
+    // bottom-right pixels statusIndicatorArea_ is meant to occupy,
+    // pushing it slightly left of the true corner (user-specified: right-
+    // bottom aligned with the main window, not "somewhere near" it).
+    statusBar()->setSizeGripEnabled(false);
+    // QStatusBar bakes in a small, non-overridable offset around every
+    // item added via addWidget()/addPermanentWidget() -- confirmed, the
+    // hard way, self-verified offscreen (QT_QPA_PLATFORM=offscreen +
+    // QWidget::grab(), no window manager/X11 involved at all, ruling
+    // those out entirely) with an exact parent-chain geometry dump: a
+    // widget added that way is reparented to be a DIRECT CHILD OF
+    // QStatusBar itself, positioned at a baked-in (2,3) offset within it
+    // that NONE of the public APIs that look like they should control it
+    // actually touch -- setContentsMargins() on the bar itself,
+    // setContentsMargins()/setSpacing() on whatever statusBar()->layout()
+    // itself returns, and a "QStatusBar::item { border: none; }"
+    // stylesheet override were ALL tried and confirmed, by that same
+    // geometry dump, to have zero effect on it. This offset is
+    // QStatusBar's own private item-management, not exposed for
+    // override.
+    //
+    // Rather than fight that (an earlier revision tried reparenting
+    // generalStatusLabel_ directly to statusBar() with fully manual,
+    // resize-synced geometry -- reverted as unnecessary complexity once
+    // this simpler alternative was pointed out): don't draw
+    // generalStatusLabel_'s OWN border at all. Its baked-in inset is
+    // invisible as long as nothing is drawing a border AT that inset --
+    // it just becomes equivalent to a few extra pixels of padding, same
+    // as its own contentsMargins below. The visible "general status"
+    // rectangle is instead QStatusBar's OWN outer border (see the
+    // setStyleSheet() call below) -- QStatusBar itself sits flush at
+    // (0,0) against the window with no inset of its own (confirmed by
+    // the same geometry dump); only its MANAGED ITEMS get the baked-in
+    // offset, so styling the bar's own frame sidesteps the whole problem.
+    statusBar()->setContentsMargins(0, 0, 0, 0);
+    statusBar()->setStyleSheet("QStatusBar { border: 1px solid gray; } QStatusBar::item { border: none; }");
+
+    generalStatusLabel_ = new QLabel(this);
+    generalStatusLabel_->setFixedHeight(boxHeight);
+    generalStatusLabel_->setContentsMargins(6, 0, 6, 0);
+    // Left-aligned (user-specified) -- contrasts with shimStatusLabel_'s
+    // own AlignCenter: a short fixed word ("SHIM"/"REAL"/"BLIND") reads
+    // better centered in its small box, while a general status message is
+    // often a full sentence that should start flush at the box's left
+    // edge, not centered.
+    generalStatusLabel_->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    // Selectable/copyable (user-specified) -- a plain QLabel is inert by
+    // default. Deliberately NOT applied to shimStatusLabel_: that one's
+    // double-click is its own custom toggle (see eventFilter()), and
+    // Qt's own text-selection also uses double-click (to select a word)
+    // -- turning this on there would fight that, not just add a feature.
+    generalStatusLabel_->setTextInteractionFlags(Qt::TextSelectableByMouse |
+                                                  Qt::TextSelectableByKeyboard);
+    generalStatusLabel_->setCursor(Qt::IBeamCursor);
+    clearGeneralStatus();
+    statusBar()->addWidget(generalStatusLabel_, /*stretch=*/1);
+
+    // One fixed-width slot holding BOTH shimStatusLabel_ and
+    // installProgressBar_ stacked in the SAME geometry, not side-by-side
+    // -- see statusIndicatorArea_'s own header comment for why the
+    // overlap is fine. No layout on the container itself (a layout
+    // manager won't let children overlap); both are given identical
+    // manual geometry below instead. Parented DIRECTLY to statusBar()
+    // (not to generalStatusLabel_, unlike an earlier revision) --
+    // confirmed the hard way (offscreen pixel dump) that
+    // generalStatusLabel_ has its OWN baked-in top inset from the same
+    // QStatusBar per-item mechanism discussed above, so nesting inside it
+    // inherited that inset vertically (a real, screenshot-confirmed gap
+    // above statusIndicatorArea_, even after forcing its height to the
+    // full bar height -- it just overflowed generalStatusLabel_'s own
+    // bottom and got silently clipped there instead of the gap closing).
+    // statusBar() itself has no inset of its own (see above), so working
+    // directly in ITS coordinate space avoids the problem entirely rather
+    // than inheriting it a second time.
+    statusIndicatorArea_ = new QWidget(statusBar());
+    // Ordinary sibling of the addWidget()-managed generalStatusLabel_ now
+    // (not a child of it) -- explicit raise() needed for z-order, same
+    // reasoning as installProgressBar_/shimStatusLabel_ below.
+    statusIndicatorArea_->raise();
+    // Catches statusBar()'s own QEvent::Resize directly (rather than
+    // generalStatusLabel_'s, which has its own inset and is no longer
+    // this widget's coordinate reference) to keep statusIndicatorArea_
+    // pinned to the bar's true right edge -- see eventFilter().
+    statusBar()->installEventFilter(this);
+
+    shimStatusLabel_ = new QLabel(statusIndicatorArea_);
+    shimStatusLabel_->setAlignment(Qt::AlignCenter);
+    // A plain QLabel has no double-click signal of its own -- caught via
+    // eventFilter() instead (see its own definition and the class
+    // comment on toggleShimStatus()). The label fills the box's full
+    // geometry (set below), so a double-click ANYWHERE inside the visible
+    // rectangle lands on it -- not just on the text glyphs themselves,
+    // per the explicit requirement that the whole box be clickable.
+    shimStatusLabel_->installEventFilter(this);
+    applyShimState(ShimState::Blind);
+
+    installProgressBar_ = new QProgressBar(statusIndicatorArea_);
     installProgressBar_->setRange(0, 100);
     installProgressBar_->setTextVisible(true);
     installProgressBar_->setVisible(false);
-    statusBar()->addPermanentWidget(installProgressBar_);
+
+    // Fixed width -- unlike generalStatusLabel_'s stretch-to-fill box,
+    // this one stays a constant size regardless of window size (per
+    // explicit direction). Edit this literal directly to resize it.
+    const int areaWidth = 160;
+    statusIndicatorArea_->setFixedSize(areaWidth, boxHeight);
+    // Initial position -- corrected to the bar's actual final width by
+    // the first real resize event (see eventFilter()); statusBar()'s own
+    // width isn't final yet at this point in the constructor.
+    statusIndicatorArea_->move(statusBar()->width() - areaWidth, 0);
+    shimStatusLabel_->setGeometry(0, 0, areaWidth, boxHeight);
+    installProgressBar_->setGeometry(0, 0, areaWidth, boxHeight);
+    // Higher z-order than shimStatusLabel_ (see statusIndicatorArea_'s own
+    // comment): raise() moves it to the front among its siblings so it
+    // paints on top on the rare chance both are visible at once.
+    installProgressBar_->raise();
+    // No need to raise() statusIndicatorArea_ itself above
+    // generalStatusLabel_ -- it's a CHILD of it, and Qt always paints a
+    // widget's children on top of the widget's own content already,
+    // regardless of add order. Only SIBLING z-order (the line above)
+    // needs an explicit raise(). Initial position is (0,0) here
+    // (corrected to the true right edge by the first real resize event
+    // eventFilter() below handles, which fires before this window is
+    // ever actually shown/painted).
 
     rebuildGrid();
     applyState(PlaybackState::Idle);
+    if (!currentTarget_.isEmpty()) {
+        refreshShimStatus();
+    }
+
+    // Periodic re-check -- see shimStatusTimer_'s own comment for why
+    // this exists at all (a target going away/coming back otherwise had
+    // no path back to a confirmed state). 1s, user-specified -- cheap
+    // when nothing's wrong (declineCredentials means a dead/unreachable
+    // target fails fast, no password prompt ever fires from this timer),
+    // and shimBusy_ (already checked inside refreshShimStatus() itself)
+    // means a tick that lands while a previous check or a toggle is still
+    // in flight is just a no-op, never piles up concurrent SSH attempts.
+    shimStatusTimer_ = new QTimer(this);
+    connect(shimStatusTimer_, &QTimer::timeout, this, &MainWindow::refreshShimStatus);
+    shimStatusTimer_->start(1000);
 
     pool_->setPreviewCallback([this](int index, const uint8_t* rgb, int w, int h, int stride) {
         QImage frame(rgb, w, h, stride, QImage::Format_RGB888);
@@ -167,35 +380,24 @@ void MainWindow::applyState(PlaybackState state) {
             playPauseAction_->setText(tr("▶ Play"));
             playPauseAction_->setEnabled(pool_->cameraCount() > 0);
             stopAction_->setEnabled(false);
-            configureAction_->setEnabled(true);
+            camSyringeSettingsAction_->setEnabled(true);
             break;
         case PlaybackState::Playing:
             playPauseAction_->setText(tr("⏸ Pause"));
             playPauseAction_->setEnabled(true);
             stopAction_->setEnabled(true);
-            configureAction_->setEnabled(false);
+            camSyringeSettingsAction_->setEnabled(false);
             break;
         case PlaybackState::Paused:
             playPauseAction_->setText(tr("▶ Play"));
             playPauseAction_->setEnabled(true);
             stopAction_->setEnabled(true);
-            configureAction_->setEnabled(false);
+            camSyringeSettingsAction_->setEnabled(false);
             break;
     }
 }
 
 void MainWindow::startStreaming() {
-    // Captured before applyState() below overwrites state_. True only for
-    // an actual Pause->Play resume where the control connection (and thus
-    // the target's whole per-camera session) is CONFIRMED still alive --
-    // exactly the case stopEverything(false) was built for, see its own
-    // comment. Deliberately re-checks isConnected() rather than assuming
-    // "Paused implies still connected": if the connection somehow died on
-    // its own during the pause (target crash/reboot, network drop), this
-    // falls through to a full redeclare below instead of resuming into a
-    // dead connection and streaming into nothing.
-    const bool resuming = state_ == PlaybackState::Paused && dispatcherClient_.isConnected();
-
     if (state_ == PlaybackState::Idle) {
         for (auto* widget : cameraWidgets_) {
             widget->resetIdle();
@@ -227,8 +429,7 @@ void MainWindow::startStreaming() {
     // wait, unlike the camera declaration below) so this doesn't need the
     // same "start first, confirm async" treatment DispatcherClient gets.
     if (!blfPath_.isEmpty()) {
-        statusBar()->setStyleSheet(QString());
-        statusBar()->clearMessage();
+        clearGeneralStatus();
         if (blfReplayer_.open(blfPath_.toStdString(), blfInterface_.toStdString())) {
             blfReplayer_.setStartOrigin(pool_->timelineOriginNs());
             blfThread_ = std::thread([this] { blfReplayer_.run(); });
@@ -237,32 +438,37 @@ void MainWindow::startStreaming() {
             // the GUI-visible equivalent, since a GUI session may have no
             // visible console. Disabled for the rest of this session (no
             // retry on a later Pause->Play) -- re-enable via Configure.
-            statusBar()->setStyleSheet("color: red;");
-            statusBar()->showMessage(
-                tr("BLF replay disabled: %1").arg(QString::fromStdString(blfReplayer_.lastError())));
+            showGeneralStatus(
+                tr("BLF replay disabled: %1").arg(QString::fromStdString(blfReplayer_.lastError())),
+                /*isError=*/true);
             blfPath_.clear();
         }
     }
 
-    if (resuming) {
-        // Resuming into the SAME still-alive target session, deliberately
-        // untouched -- no redeclare, no version re-probe. Confirmed for
-        // real this matters, not just tidiness: redeclaring here would
-        // run DispatcherClient::declareAsync()'s own disconnect()-then-
-        // reconnect against the very connection stopEverything(false)
-        // just went out of its way to keep open, tearing down and
-        // respawning the target's receiver/injector/viewer for no reason
-        // other than resuming -- visible on the target's own physical
-        // panel as a brief blank-then-recover glitch (real-hardware bug
-        // report). checkInjectorVersion() is skipped for the same
-        // reason: its own short-lived probe connection can only ever
-        // succeed by racing into the brief gap that reconnect creates --
-        // main_dispatcher.cpp accepts exactly one connection at a time,
-        // see its own accept() loop -- which is also why that notice
-        // showed up specifically ON a resume, not a coincidence.
-        return;
-    }
-
+    // Every Play press -- including a Pause->Play resume -- redeclares to
+    // the target, unconditionally. This used to be skipped on resume (see
+    // git history) to avoid a brief blank-then-recover glitch on the
+    // target's own physical preview panel: redeclaring runs
+    // DispatcherClient::declareAsync()'s disconnect()-then-reconnect,
+    // which makes qcarcam_dispatcher's handleConnection() call
+    // stopSession() (tearing down the previous receiver/injector/viewer)
+    // before spawning fresh ones. That teardown-and-respawn is now the
+    // POINT, not a side effect to avoid: real-hardware bug report --
+    // stopEverything(false) (Pause) stops local RTP send but deliberately
+    // leaves the target's receiver process (and its open hardware H.264
+    // decoder session) running and idle; resuming into that SAME session
+    // feeds a brand-new RTP/MPEGTS stream (fresh SPS/PPS) into an
+    // already-open decoder that had gone idle mid-stream, which was
+    // confirmed live to wedge the target's Venus/vidc hardware decoder
+    // block badly enough that NO software-side restart (qcarcam_test,
+    // CamSyringe, even a full dispatcher Stop/Play) recovers it -- only a
+    // full target power cycle did. A fresh declare's stopSession() sends
+    // the old receiver a graceful SIGINT first (see
+    // main_dispatcher.cpp's stopPid()), giving its HwVideoDecoder a real
+    // chance to close before the next session's receiver opens a new one,
+    // which avoids the wedge. The cosmetic on-panel glitch this
+    // reintroduces is strictly preferable to a hardware hang that needs a
+    // power cycle to clear.
     for (auto* widget : cameraWidgets_) {
         widget->showStatus(tr("Confirming target injection…"));
     }
@@ -285,7 +491,7 @@ void MainWindow::declareToTarget() {
     // widget/pool_ state, same convention as StreamPool's own preview/
     // error callbacks above.
     dispatcherClient_.declareAsync(
-        currentTarget_.toStdString(), controlPort_, std::move(declarations), injectOnly_, qcxBypass_,
+        currentTarget_.toStdString(), controlPort_, std::move(declarations), injectOnly_,
         [this](std::vector<CameraDeclareOutcome> outcomes, std::vector<PreviewIssue> previewIssues,
                bool connectFailed, std::string connectError) {
             QString qConnectError = QString::fromStdString(connectError);
@@ -323,6 +529,76 @@ void MainWindow::checkInjectorVersion() {
                         tr("Target is running qcarcam_dispatcher v%1; the injector bundle "
                            "available locally is v%2. CamSyringe will try to continue regardless.")
                             .arg(qVersion, localVersion));
+                },
+                Qt::QueuedConnection);
+        });
+}
+
+void MainWindow::resolveCameraGeometry() {
+    if (currentTarget_.isEmpty()) {
+        return;
+    }
+
+    const QMap<int, camsyringe::ResolvedCameraGeometry>& cached = geometryCache_[currentTarget_];
+    std::vector<int> needed;
+    for (size_t i = 0; i < pool_->cameraCount(); ++i) {
+        int camId = pool_->configAt(i).camId;
+        if (!cached.contains(camId) &&
+            std::find(needed.begin(), needed.end(), camId) == needed.end()) {
+            needed.push_back(camId);
+        }
+    }
+    if (needed.empty()) {
+        return; // every configured id already resolved for this target
+    }
+    std::sort(needed.begin(), needed.end()); // ascending -- the fallback order, see
+                                              // CameraGeometryResolver::resolveAsync()'s own comment
+
+    QString target = currentTarget_;
+    camsyringe::CameraGeometryResolver::resolveAsync(
+        sshSession_, target, sshUser_, sshKeyPath_, needed,
+        [this, target](std::vector<camsyringe::ResolvedCameraGeometry> results) {
+            // Runs on CameraGeometryResolver's own background thread --
+            // marshal before touching geometryCache_/pool_/any widget,
+            // same convention as DispatcherClient/DispatcherVersionProbe.
+            QMetaObject::invokeMethod(
+                this,
+                [this, target, results = std::move(results)]() {
+                    QStringList summary;
+                    geometryReadTimestamps_[target] = QDateTime::currentDateTime();
+                    for (const auto& r : results) {
+                        geometryCache_[target][r.camId] = r;
+                        if (!r.ok) {
+                            summary << tr("cam %1: unknown").arg(r.camId);
+                            continue;
+                        }
+                        summary << (r.wasFallback ? tr("cam %1: %2x%3 (fallback)")
+                                                         .arg(r.camId)
+                                                         .arg(r.width)
+                                                         .arg(r.height)
+                                                   : tr("cam %1: %2x%3")
+                                                         .arg(r.camId)
+                                                         .arg(r.width)
+                                                         .arg(r.height));
+                        // Only meaningful if currentTarget_ is STILL this
+                        // target (the user could have re-run Configure
+                        // against a different one while this was in
+                        // flight) -- pool_'s own camIds are looked up
+                        // fresh here rather than assumed unchanged.
+                        if (target == currentTarget_) {
+                            for (size_t i = 0; i < pool_->cameraCount(); ++i) {
+                                if (pool_->configAt(i).camId == r.camId) {
+                                    pool_->setTargetGeometry(i, static_cast<int>(r.width),
+                                                              static_cast<int>(r.height));
+                                }
+                            }
+                        }
+                    }
+                    if (target == currentTarget_ && !summary.isEmpty()) {
+                        showGeneralStatus(
+                            tr("Camera resolution: %1").arg(summary.join(QStringLiteral("; "))));
+                    }
+                    camsyringe::CameraConfigStore::save(geometryCache_, geometryReadTimestamps_);
                 },
                 Qt::QueuedConnection);
         });
@@ -452,14 +728,14 @@ void MainWindow::onDeclareComplete(std::vector<CameraDeclareOutcome> outcomes,
         for (const auto& issue : previewIssues) {
             ids << QString::number(issue.camId);
         }
-        statusBar()->setStyleSheet("color: red;");
-        statusBar()->showMessage(
+        showGeneralStatus(
             tr("Target's local preview failed for cam id(s) %1 -- injection itself is fine, only "
                "the target's own on-panel display for %2 %3 affected (see "
                "/tmp/qcarcam_dispatcher_previewer.log on target).")
                 .arg(ids.join(", "))
                 .arg(ids.size() == 1 ? tr("that camera") : tr("those cameras"))
-                .arg(ids.size() == 1 ? tr("is") : tr("are")));
+                .arg(ids.size() == 1 ? tr("is") : tr("are")),
+            /*isError=*/true);
     }
 }
 
@@ -489,8 +765,7 @@ void MainWindow::onStopTriggered() {
         widget->resetIdle();
         widget->clearError();
     }
-    statusBar()->setStyleSheet(QString());
-    statusBar()->clearMessage();
+    clearGeneralStatus();
     applyState(PlaybackState::Idle);
     if (!currentTarget_.isEmpty()) {
         killTargetProcesses();
@@ -526,8 +801,8 @@ void MainWindow::killTargetProcesses() {
             QMetaObject::invokeMethod(
                 this,
                 [this, error]() {
-                    statusBar()->setStyleSheet("color: red;");
-                    statusBar()->showMessage(tr("Couldn't stop target processes: %1").arg(error));
+                    showGeneralStatus(tr("Couldn't stop target processes: %1").arg(error),
+                                      /*isError=*/true);
                 },
                 Qt::QueuedConnection);
         }
@@ -547,22 +822,32 @@ void MainWindow::onConfigureTriggered() {
     }
 
     CameraConfigDialog dialog(currentTarget_, controlPort_, sshUser_, sshKeyPath_, currentFiles,
-                               currentCamIds, injectOnly_, qcxBypass_, blfPath_, blfInterface_, this);
+                               currentCamIds, injectOnly_, blfPath_, blfInterface_,
+                               geometryCache_.value(currentTarget_), this);
     if (dialog.exec() != QDialog::Accepted) {
         return;
     }
 
     currentTarget_ = dialog.target();
     installInjectorAction_->setEnabled(!currentTarget_.isEmpty());
+    cameraSettingsAction_->setEnabled(!currentTarget_.isEmpty());
     controlPort_ = dialog.controlPort();
     sshUser_ = dialog.sshUser();
     sshKeyPath_ = dialog.sshKeyPath();
     injectOnly_ = dialog.injectOnly();
-    qcxBypass_ = dialog.qcxBypass();
+    // Configure may have pointed at a different target entirely -- last
+    // known SHIM/REAL state belonged to the PREVIOUS target, not this one.
+    // Drop it and query fresh rather than showing a stale answer against
+    // the wrong box.
+    applyShimState(ShimState::Blind);
+    refreshShimStatus();
     blfPath_ = dialog.blfPath();
     blfInterface_ = dialog.blfInterface();
     QStringList files = dialog.videoFiles();
     std::vector<int> camIds = dialog.camIds();
+
+    const QMap<int, camsyringe::ResolvedCameraGeometry>& cachedForTarget =
+        geometryCache_[currentTarget_]; // creates an empty entry if new -- fine, lookups below just miss
 
     pool_->clearCameras();
     for (int i = 0; i < files.size(); ++i) {
@@ -576,11 +861,63 @@ void MainWindow::onConfigureTriggered() {
         cfg.index = i;
         cfg.camId = camIds[static_cast<size_t>(i)];
         cfg.port = port;
+        // Already resolved for this target in a previous Configure apply
+        // (see resolveCameraGeometry()) -- seed it now rather than
+        // waiting for a fresh (never-run, since it's cached) resolve.
+        auto it = cachedForTarget.find(cfg.camId);
+        if (it != cachedForTarget.end() && it->ok) {
+            cfg.targetWidth = static_cast<int>(it->width);
+            cfg.targetHeight = static_cast<int>(it->height);
+        }
         pool_->addCamera(std::move(cfg));
     }
 
     rebuildGrid();
     applyState(PlaybackState::Idle);
+    resolveCameraGeometry();
+}
+
+void MainWindow::onCameraSettingsTriggered() {
+    if (currentTarget_.isEmpty()) {
+        return; // defensive; disabled without a target anyway
+    }
+
+    // Every QCarCam id the chip can address over GMSL2 (camsyringe::
+    // kMinCamId/kMaxCamId, 1-16) -- deliberately NOT just pool_'s
+    // currently-configured injection camera ids. Explicit requirement:
+    // this dialog reads the target's real configuration for every camera
+    // the hardware could have, not only whichever ones this session
+    // happens to be injecting into right now.
+    std::vector<int> camIds;
+    camIds.reserve(camsyringe::kMaxCamId - camsyringe::kMinCamId + 1);
+    for (int id = camsyringe::kMinCamId; id <= camsyringe::kMaxCamId; ++id) {
+        camIds.push_back(id);
+    }
+
+    ui::CameraSettingsDialog dialog(sshSession_, currentTarget_, sshUser_, sshKeyPath_,
+                                     std::move(camIds), geometryCache_.value(currentTarget_),
+                                     geometryReadTimestamps_.value(currentTarget_), this);
+    // Folds a fresh Read back into MainWindow's own cache/timestamp (same
+    // storage resolveCameraGeometry() populates) so it benefits a later
+    // Configure/Play too, not just this dialog's own table.
+    connect(&dialog, &ui::CameraSettingsDialog::geometryResolved, this,
+            [this](const QString& target, const std::vector<camsyringe::ResolvedCameraGeometry>& results,
+                   const QDateTime& when) {
+                geometryReadTimestamps_[target] = when;
+                for (const auto& r : results) {
+                    geometryCache_[target][r.camId] = r;
+                    if (r.ok && target == currentTarget_) {
+                        for (size_t i = 0; i < pool_->cameraCount(); ++i) {
+                            if (pool_->configAt(i).camId == r.camId) {
+                                pool_->setTargetGeometry(i, static_cast<int>(r.width),
+                                                          static_cast<int>(r.height));
+                            }
+                        }
+                    }
+                }
+                camsyringe::CameraConfigStore::save(geometryCache_, geometryReadTimestamps_);
+            });
+    dialog.exec();
 }
 
 void MainWindow::onInstallInjectorTriggered() {
@@ -603,8 +940,7 @@ void MainWindow::onInstallInjectorTriggered() {
     }
 
     QString version = camsyringe::InjectorBundleFinder::extractVersion(bundlePath);
-    statusBar()->setStyleSheet(QString());
-    statusBar()->showMessage(tr("Preparing injector install on %1…").arg(currentTarget_));
+    showGeneralStatus(tr("Preparing injector install on %1…").arg(currentTarget_));
     runInjectorInstall(bundlePath, version);
 }
 
@@ -668,8 +1004,7 @@ void MainWindow::runInjectorInstall(const QString& bundlePath, const QString& bu
                         // confirmation dialog with the file unchanged.
                     }
                     if (accepted) {
-                        statusBar()->setStyleSheet(QString());
-                        statusBar()->showMessage(
+                        showGeneralStatus(
                             tr("Installing injector v%1 on %2… (this runs in the background -- "
                                "Play/Pause/Stop still work meanwhile)")
                                 .arg(*bundleVersion, target));
@@ -713,8 +1048,7 @@ void MainWindow::runInjectorInstall(const QString& bundlePath, const QString& bu
                         installProgressBar_->setRange(0, 100);
                         installProgressBar_->setValue(percent);
                     }
-                    statusBar()->setStyleSheet(QString());
-                    statusBar()->showMessage(label);
+                    showGeneralStatus(label);
                 },
                 Qt::QueuedConnection);
         },
@@ -747,8 +1081,7 @@ void MainWindow::runInjectorInstall(const QString& bundlePath, const QString& bu
                 this,
                 [this, success, cancelled, summary, message]() {
                     installProgressBar_->setVisible(false);
-                    statusBar()->setStyleSheet(success || cancelled ? QString() : "color: red;");
-                    statusBar()->showMessage(summary);
+                    showGeneralStatus(summary, /*isError=*/!success && !cancelled);
                     if (!success && !cancelled) {
                         QMessageBox box(QMessageBox::Critical, tr("Injector Install Failed"), message,
                                          QMessageBox::Ok, this);
@@ -771,6 +1104,224 @@ void MainWindow::onAboutTriggered() {
 void MainWindow::closeEvent(QCloseEvent* event) {
     stopEverything(true);
     QMainWindow::closeEvent(event);
+}
+
+void MainWindow::showGeneralStatus(const QString& message, bool isError) {
+    generalStatusLabel_->setText(message);
+    // No border here (deliberately) -- QStatusBar's own baked-in item
+    // inset (see the constructor's own long comment on this) means a
+    // border drawn on generalStatusLabel_ ITSELF sits a few px shy of the
+    // window's true edge. statusBar()'s own frame (set once, in the
+    // constructor) is the visible "general status" rectangle instead --
+    // it sits flush with no inset of its own, sidestepping the problem
+    // entirely rather than fighting it.
+    generalStatusLabel_->setStyleSheet(isError ? "color: red;" : QString());
+}
+
+void MainWindow::clearGeneralStatus() { showGeneralStatus(QString(), /*isError=*/false); }
+
+bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == shimStatusLabel_ && event->type() == QEvent::MouseButtonDblClick) {
+        toggleShimStatus();
+        return true;
+    }
+    // Keep statusIndicatorArea_ (a plain child of statusBar() itself, not
+    // layout-managed -- see the constructor's own comment on why it's
+    // parented there directly rather than to generalStatusLabel_) pinned
+    // to the bar's true right edge whenever the bar resizes.
+    if (watched == statusBar() && event->type() == QEvent::Resize) {
+        statusIndicatorArea_->move(statusBar()->width() - statusIndicatorArea_->width(), 0);
+    }
+    return QMainWindow::eventFilter(watched, event);
+}
+
+void MainWindow::applyShimState(ShimState state) {
+    shimState_ = state;
+    QString text;
+    QString colorStyle;
+    switch (state) {
+        case ShimState::Shim:
+            text = tr("SHIM");
+            colorStyle = "color: red; font-weight: bold;";
+            break;
+        case ShimState::Real:
+            text = tr("REAL");
+            colorStyle = "color: green; font-weight: normal;";
+            break;
+        case ShimState::Blind:
+        default:
+            text = tr("BLIND");
+            colorStyle = "color: #555555; font-weight: normal;"; // dark gray
+            break;
+    }
+    shimStatusLabel_->setText(text);
+    // The border IS the visible "rectangular box" -- shimStatusLabel_
+    // already fills statusIndicatorArea_'s full geometry (see the
+    // constructor), so this border traces exactly the region a
+    // double-click anywhere inside registers on, not just the glyphs.
+    // Sharp corners (no border-radius) -- see showGeneralStatus()'s own
+    // comment for why: a rounded corner's unpainted corner pixel read as
+    // a spurious gap at a flush window edge.
+    shimStatusLabel_->setStyleSheet(QString("border: 1px solid gray; %1").arg(colorStyle));
+}
+
+void MainWindow::refreshShimStatus() {
+    if (currentTarget_.isEmpty() || shimBusy_) {
+        if (shimStatusDebugEnabled()) {
+            std::fprintf(stderr, "[shimstatus] tick skipped (target empty=%d, busy=%d)\n",
+                         currentTarget_.isEmpty() ? 1 : 0, shimBusy_ ? 1 : 0);
+        }
+        return;
+    }
+    shimBusy_ = true;
+    QString target = currentTarget_;
+    QString sshUser = sshUser_;
+    QString sshKeyPath = sshKeyPath_;
+    std::thread([this, target, sshUser, sshKeyPath]() {
+        const bool debug = shimStatusDebugEnabled();
+        const auto t0 = std::chrono::steady_clock::now();
+        ShimState result = ShimState::Blind;
+        // declineCredentials, not the real prompt -- see this function's
+        // own header comment.
+        const bool authed = sshSession_.ensureAuth(target, sshUser, sshKeyPath, declineCredentials);
+        const auto t1 = std::chrono::steady_clock::now();
+        bool queryOk = false;
+        QString queryOut;
+        if (authed) {
+            auto res = sshSession_.run(
+                target,
+                QString("test -e %1 && echo SHIM || echo REAL").arg(kRealLibBackupPath),
+                5000);
+            queryOk = res.ok();
+            queryOut = res.stdOut.trimmed();
+            if (queryOk) {
+                if (queryOut == "SHIM") {
+                    result = ShimState::Shim;
+                } else if (queryOut == "REAL") {
+                    result = ShimState::Real;
+                }
+            }
+        }
+        if (debug) {
+            const auto t2 = std::chrono::steady_clock::now();
+            auto ms = [](auto a, auto b) -> long long {
+                return std::chrono::duration_cast<std::chrono::milliseconds>(b - a).count();
+            };
+            std::fprintf(stderr,
+                         "[shimstatus] target=%s ensureAuth=%s (%lldms) query=%s out=\"%s\" "
+                         "(%lldms) total=%lldms -> %s\n",
+                         target.toUtf8().constData(), authed ? "ok" : "FAILED", ms(t0, t1),
+                         authed ? (queryOk ? "ok" : "FAILED") : "skipped",
+                         queryOut.toUtf8().constData(), authed ? ms(t1, t2) : 0, ms(t0, t2),
+                         result == ShimState::Shim ? "SHIM" : result == ShimState::Real ? "REAL" : "BLIND");
+        }
+        QMetaObject::invokeMethod(
+            this,
+            [this, result]() {
+                shimBusy_ = false;
+                applyShimState(result);
+            },
+            Qt::QueuedConnection);
+    }).detach();
+}
+
+void MainWindow::toggleShimStatus() {
+    // Explicit requirement: double-clicks are ignored entirely while
+    // Blind -- not connected, never queried, or a query/toggle is
+    // already in flight (that in-flight window itself shows Blind, see
+    // below), so there's nothing confirmed to toggle relative to.
+    if (shimState_ == ShimState::Blind) {
+        return;
+    }
+    if (currentTarget_.isEmpty() || shimBusy_) {
+        return;
+    }
+    bool toShim = (shimState_ == ShimState::Real);
+
+    shimBusy_ = true;
+    applyShimState(ShimState::Blind); // "BLIND" while the toggle is in flight -- also blocks a second click
+    QString target = currentTarget_;
+    QString sshUser = sshUser_;
+    QString sshKeyPath = sshKeyPath_;
+    std::thread([this, target, sshUser, sshKeyPath, toShim]() {
+        auto credentialsCb = [this, sshUser](const QString& t, QString* username, QString* password) {
+            bool accepted = false;
+            QMetaObject::invokeMethod(
+                this,
+                [this, t, sshUser, username, password, &accepted]() {
+                    ui::SshCredentialsDialog dlg(t, sshUser, this);
+                    if (dlg.exec() == QDialog::Accepted) {
+                        *username = dlg.username();
+                        *password = dlg.password();
+                        accepted = true;
+                    }
+                },
+                Qt::BlockingQueuedConnection);
+            return accepted;
+        };
+
+        QString error;
+        // Blind on failure, NOT "assume unchanged" -- a failed toggle
+        // means the target's actual state is no longer confirmed (it may
+        // have partially applied, e.g. the backup rename succeeded but
+        // the cp didn't), so guessing the pre-toggle state back would
+        // risk showing a confident answer that's wrong. Only flips to a
+        // real answer once the remote command actually reports success.
+        ShimState finalState = ShimState::Blind;
+        if (!sshSession_.ensureAuth(target, sshUser, sshKeyPath, credentialsCb)) {
+            error = tr("SSH authentication cancelled");
+        } else if (toShim) {
+            // No PC-side file/scp at all -- the shim travels ONLY as part
+            // of the one injector bundle now (see
+            // qcarcam-injector/release/create-qcarcam-inj-bundle.sh),
+            // landing at kShimOnTargetPath when that bundle is installed
+            // (InjectorBundleInstaller, same /var/opt convention it
+            // already uses). This toggle just copies it from there into
+            // place -- if it's missing, the fix is "install the bundle",
+            // not "find/build a loose file on this PC", so that's what
+            // the error says. Back up the real file ONLY if it hasn't
+            // been already -- never overwrite an existing backup with a
+            // second rename (would otherwise clobber the one true REAL
+            // copy if this ever ran twice in a row without a REAL toggle
+            // between).
+            QString cmd = QString("%1; [ -e %2 ] || { echo %3; exit 1; }; "
+                                   "[ -e %4 ] || mv %5 %4; cp %2 %5 && chmod 555 %5")
+                               .arg(kRemountRw, kShimOnTargetPath, kShimMissingMarker, kRealLibBackupPath,
+                                    kRealLibPath);
+            auto res = sshSession_.run(target, cmd, 15000);
+            if (res.ok()) {
+                finalState = ShimState::Shim;
+            } else if (res.stdOut.contains(kShimMissingMarker)) {
+                error = tr("libqcxclient_shim.so not found on target at %1 -- install the injector "
+                           "bundle first (⇪ Install Injector).")
+                            .arg(kShimOnTargetPath);
+            } else {
+                error = res.stdErr;
+            }
+        } else {
+            // SHIM -> REAL: one atomic rename, removes the shim file as a
+            // side effect -- see qcarcam-injector/ARCHITECTURE.md item 37.
+            QString cmd =
+                QString("%1; mv %2 %3").arg(kRemountRw, kRealLibBackupPath, kRealLibPath);
+            auto res = sshSession_.run(target, cmd, 10000);
+            if (res.ok()) {
+                finalState = ShimState::Real;
+            } else {
+                error = res.stdErr;
+            }
+        }
+
+        QMetaObject::invokeMethod(
+            this,
+            [this, finalState, error]() {
+                shimBusy_ = false;
+                applyShimState(finalState);
+                if (!error.isEmpty()) {
+                    showGeneralStatus(tr("SHIM/REAL toggle failed: %1").arg(error), /*isError=*/true);
+                }
+            },
+            Qt::QueuedConnection);
+    }).detach();
 }
 
 } // namespace camsyringe::ui

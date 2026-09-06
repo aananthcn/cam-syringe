@@ -30,11 +30,16 @@ public:
     // command -- see kStartCommand's own comment in the .cpp for why that
     // scope matters, confirmed for real) via /var/opt/env.sh +
     // run_qcarcam.sh. Success/failure is decided ENTIRELY by polling the
-    // control port for up to ~10s afterward, not by whether the ssh
+    // control port for up to ~40s afterward, not by whether the ssh
     // command itself returned cleanly -- confirmed for real that ssh can
-    // time out here (a cold target-side display-service start can take
-    // close to/past this function's own ssh timeout) while the dispatcher
-    // still comes up fine; only report failure if the port never does.
+    // time out here while the dispatcher still comes up fine; only report
+    // failure if the port never does. The 40s figure isn't arbitrary:
+    // run_qcarcam.sh's own source waits up to a hard 30s for the target's
+    // display service on a cold start BEFORE it ever starts
+    // qcarcam_dispatcher at all -- a shorter poll (this used to be 10s)
+    // reported a real, live-confirmed false-negative "didn't come up"
+    // failure from a fresh Install Injector's post-install restart, while
+    // the dispatcher was, moments later, demonstrably running fine.
     static bool ensureRunning(TargetSsh& ssh, const QString& target, int controlPort,
                                QString* error);
 

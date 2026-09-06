@@ -24,7 +24,7 @@ void printUsage(const char* prog) {
     std::fprintf(
         stderr,
         "usage: %s [--target [user@]<target>] [--control-port N] [--ssh-key PATH] [--cam-ids IDS]\n"
-        "       %*s[--playall] [--inject-only] [--qcx-bypass] [--blf-file PATH]\n"
+        "       %*s[--playall] [--inject-only] [--blf-file PATH]\n"
         "       %*s[--blf-interface IFACE] [<video1> [<video2> [<video3> [<video4>]]]]\n"
         "  --target [USER@]TARGET  target host (default: %s), optionally prefixed with the SSH\n"
         "                     username CamSyringe uses for it (default: %s) -- also settable/\n"
@@ -41,9 +41,8 @@ void printUsage(const char* prog) {
         "                     1,2,3,8). Each id must be 1-%d and unique.\n"
         "  --inject-only      Target-side: skip the local Screen/EGL preview render on the\n"
         "                     target entirely -- pure injection into qcxserver (see\n"
-        "                     qcarcam_dispatcher's own --inject-only flag)\n"
-        "  --qcx-bypass       Target-side: skip qcxserver entirely (diagnostic -- see\n"
-        "                     qcarcam_injector's own --qcx-bypass flag)\n"
+        "                     qcarcam_dispatcher's own --inject-only flag). On by default;\n"
+        "                     uncheck it in Settings > CamSyringe to disable\n"
         "  --blf-file PATH    Vector BLF file to replay (Ethernet-frame objects only, see\n"
         "                     src/blf/BlfLoader.h) as raw AF_PACKET frames, original timing,\n"
         "                     verbatim (no header rewriting). Needs CAP_NET_RAW -- see\n"
@@ -120,8 +119,7 @@ int main(int argc, char** argv) {
     int controlPort = kDefaultControlPort;
     std::string camIdsArg;
     bool playAll = false;
-    bool injectOnly = false;
-    bool qcxBypass = false;
+    bool injectOnly = true;
     std::string sshKeyPath;
     std::string blfFile;
     std::string blfInterface = kDefaultBlfInterface;
@@ -153,8 +151,6 @@ int main(int argc, char** argv) {
             playAll = true;
         } else if (arg == "--inject-only") {
             injectOnly = true;
-        } else if (arg == "--qcx-bypass") {
-            qcxBypass = true;
         } else if (arg == "--ssh-key") {
             if (i + 1 >= argc) {
                 printUsage(argv[0]);
@@ -241,7 +237,7 @@ int main(int argc, char** argv) {
 
     camsyringe::ui::MainWindow window(&pool, QString::fromStdString(target), controlPort,
                                        QString::fromStdString(sshUser),
-                                       QString::fromStdString(sshKeyPath), injectOnly, qcxBypass,
+                                       QString::fromStdString(sshKeyPath), injectOnly,
                                        QString::fromStdString(blfFile),
                                        QString::fromStdString(blfInterface), playAll);
     window.resize(1280, 720);

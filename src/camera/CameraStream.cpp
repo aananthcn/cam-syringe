@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <cstdio>
+#include <cstring>
 #include <ctime>
 
 extern "C" {
@@ -67,11 +68,14 @@ AVRational inputFrameRate(AVFormatContext* fmt, int streamIndex) {
 
 } // namespace
 
-CameraStream::CameraStream(std::string inputPath, std::string destUrl, std::string label, int index)
+CameraStream::CameraStream(std::string inputPath, std::string destUrl, std::string label, int index,
+                           int forcedWidth, int forcedHeight)
     : inputPath_(std::move(inputPath)),
       destUrl_(std::move(destUrl)),
       label_(std::move(label)),
-      index_(index) {}
+      index_(index),
+      forcedWidth_(forcedWidth),
+      forcedHeight_(forcedHeight) {}
 
 CameraStream::~CameraStream() {
     if (swsCtx_) {
@@ -285,17 +289,43 @@ bool CameraStream::open() {
         return false;
     }
 
-    computeOutputSize(decCtx_->width, decCtx_->height, kMaxWidth, kMaxHeight, &outWidth_,
-                      &outHeight_);
-    std::fprintf(stderr, "camsyringe[%s]: %dx%d -> %dx%d\n", logLabel().c_str(), decCtx_->width,
-                 decCtx_->height, outWidth_, outHeight_);
+    if (forcedWidth_ > 0 && forcedHeight_ > 0) {
+        // Match the target's real, declared/negotiated resolution EXACTLY
+        // (see CameraConfig::targetWidth/Height's own comment) -- fit the
+        // source's own aspect ratio within this canvas, centered,
+        // letterboxed (see contentWidth_/Height_'s own comment); unlike
+        // computeOutputSize() below, this may scale UP, since the goal is
+        // an exact match, not just an upper bound.
+        outWidth_ = forcedWidth_;
+        outHeight_ = forcedHeight_;
+        double scale = std::min(static_cast<double>(outWidth_) / decCtx_->width,
+                                 static_cast<double>(outHeight_) / decCtx_->height);
+        contentWidth_ = std::max(static_cast<int>(decCtx_->width * scale) & ~1, 2);
+        contentHeight_ = std::max(static_cast<int>(decCtx_->height * scale) & ~1, 2);
+        contentOffsetX_ = ((outWidth_ - contentWidth_) / 2) & ~1;
+        contentOffsetY_ = ((outHeight_ - contentHeight_) / 2) & ~1;
+        std::fprintf(stderr,
+                     "camsyringe[%s]: %dx%d -> %dx%d canvas (target-matched; content %dx%d at "
+                     "+%d,+%d)\n",
+                     logLabel().c_str(), decCtx_->width, decCtx_->height, outWidth_, outHeight_,
+                     contentWidth_, contentHeight_, contentOffsetX_, contentOffsetY_);
+    } else {
+        computeOutputSize(decCtx_->width, decCtx_->height, kMaxWidth, kMaxHeight, &outWidth_,
+                          &outHeight_);
+        contentWidth_ = outWidth_;
+        contentHeight_ = outHeight_;
+        contentOffsetX_ = 0;
+        contentOffsetY_ = 0;
+        std::fprintf(stderr, "camsyringe[%s]: %dx%d -> %dx%d\n", logLabel().c_str(), decCtx_->width,
+                     decCtx_->height, outWidth_, outHeight_);
+    }
 
     if (!openEncoder()) {
         return false;
     }
 
-    swsCtx_ = sws_getContext(decCtx_->width, decCtx_->height, decCtx_->pix_fmt, outWidth_,
-                              outHeight_, AV_PIX_FMT_YUV420P, SWS_BILINEAR, nullptr, nullptr,
+    swsCtx_ = sws_getContext(decCtx_->width, decCtx_->height, decCtx_->pix_fmt, contentWidth_,
+                              contentHeight_, AV_PIX_FMT_YUV420P, SWS_BILINEAR, nullptr, nullptr,
                               nullptr);
     if (!swsCtx_) {
         std::fprintf(stderr, "CameraStream[%s]: failed to create scaler context\n",
@@ -360,6 +390,20 @@ void CameraStream::run() {
     scaledFrame->height = outHeight_;
     av_frame_get_buffer(scaledFrame, 0);
 
+    // Letterbox bars (only visible when forcedWidth_/Height_ is set --
+    // otherwise contentWidth_/Height_ == outWidth_/Height_ and every
+    // frame below overwrites the whole canvas anyway): fill the WHOLE
+    // canvas with standard limited-range "TV black" (Y=16, U=V=128)
+    // ONCE here, since sws_scale() below only ever writes into the
+    // inner contentWidth_/Height_ sub-rect at contentOffsetX_/Y_ --
+    // these margins are never touched again for the life of this stream.
+    std::memset(scaledFrame->data[0], 16,
+                static_cast<size_t>(scaledFrame->linesize[0]) * outHeight_);
+    std::memset(scaledFrame->data[1], 128,
+                static_cast<size_t>(scaledFrame->linesize[1]) * outHeight_ / 2);
+    std::memset(scaledFrame->data[2], 128,
+                static_cast<size_t>(scaledFrame->linesize[2]) * outHeight_ / 2);
+
     streamStartNs_ = startOriginSet_.load(std::memory_order_acquire) ? externalStartOriginNs_
                                                                       : monotonicNowNs();
     fpsWindowStartNs_ = streamStartNs_;
@@ -407,8 +451,28 @@ void CameraStream::run() {
 
             int decRecvRet;
             while ((decRecvRet = avcodec_receive_frame(decCtx_, decFrame)) == 0) {
-                sws_scale(swsCtx_, decFrame->data, decFrame->linesize, 0, decCtx_->height,
-                          scaledFrame->data, scaledFrame->linesize);
+                // Writes into the inner contentWidth_/Height_ sub-rect at
+                // contentOffsetX_/Y_ (== the whole canvas, offset 0, when
+                // no forced size is set -- see contentWidth_'s own
+                // comment), leaving any letterbox margin (filled once,
+                // above) untouched. contentOffsetX_/Y_ are always even
+                // (rounded in open()), so the /2 chroma-plane offsets
+                // below are exact.
+                uint8_t* dstData[4] = {
+                    scaledFrame->data[0] +
+                        static_cast<size_t>(contentOffsetY_) * scaledFrame->linesize[0] +
+                        contentOffsetX_,
+                    scaledFrame->data[1] +
+                        static_cast<size_t>(contentOffsetY_ / 2) * scaledFrame->linesize[1] +
+                        contentOffsetX_ / 2,
+                    scaledFrame->data[2] +
+                        static_cast<size_t>(contentOffsetY_ / 2) * scaledFrame->linesize[2] +
+                        contentOffsetX_ / 2,
+                    nullptr};
+                int dstLinesize[4] = {scaledFrame->linesize[0], scaledFrame->linesize[1],
+                                       scaledFrame->linesize[2], 0};
+                sws_scale(swsCtx_, decFrame->data, decFrame->linesize, 0, decCtx_->height, dstData,
+                          dstLinesize);
                 av_frame_unref(decFrame);
                 // Encoder timestamps are a plain incrementing frame counter
                 // (encCtx_->time_base == 1/fps) rather than carried over

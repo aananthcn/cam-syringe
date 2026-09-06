@@ -1,25 +1,28 @@
 #pragma once
 
 #include <QDialog>
+#include <QMap>
 #include <QString>
 #include <QStringList>
 
 #include <vector>
 
 #include "camera/PortScheme.h"
+#include "net/CameraGeometryResolver.h"
 
 class QSpinBox;
 class QLineEdit;
 class QPushButton;
 class QCheckBox;
 class QWidget;
+class QLabel;
 
 namespace camsyringe::ui {
 
 // Modal dialog for the "Configure" menu action: target, control port,
-// number of cameras (1-4), each camera's video file + QCarCam id, the two
-// session-wide target-side flags (--inject-only, --qcx-bypass), and
-// (Phase 3) an optional BLF/Ethernet replay (file + network interface) --
+// number of cameras (1-4), each camera's video file + QCarCam id, the
+// session-wide target-side flag (--inject-only), and (Phase 3) an
+// optional BLF/Ethernet replay (file + network interface) --
 // deliberately the single place for all session settings, so a future
 // setting gets a new field here rather than another menu action. Only
 // reachable while MainWindow is in its Idle state.
@@ -29,14 +32,22 @@ class CameraConfigDialog : public QDialog {
 public:
     // camIds: parallel to initialFiles (same length or shorter -- missing
     // entries default to a distinct id, see .cpp). controlPort/sshUser/
-    // sshKeyPath/injectOnly/qcxBypass/blf*: the previous session's
+    // sshKeyPath/injectOnly/blf*: the previous session's
     // settings, so re-opening Configure doesn't reset them. initialBlfPath
     // empty means BLF replay starts unchecked.
+    // resolvedGeometry: MainWindow's geometryCache_ entry for
+    // initialTarget (empty map if none resolved yet, or if
+    // initialTarget is new/empty) -- purely informational, shown next to
+    // each row's Cam ID field and refreshed live as that field is edited
+    // (see updateResolvedLabel()); never itself triggers a live query
+    // (that's MainWindow::resolveCameraGeometry(), which only ever runs
+    // AFTER this dialog is accepted and closed).
     explicit CameraConfigDialog(const QString& initialTarget, int initialControlPort,
                                  const QString& initialSshUser, const QString& initialSshKeyPath,
                                  const QStringList& initialFiles, const std::vector<int>& initialCamIds,
-                                 bool initialInjectOnly, bool initialQcxBypass,
+                                 bool initialInjectOnly,
                                  const QString& initialBlfPath, const QString& initialBlfInterface,
+                                 const QMap<int, camsyringe::ResolvedCameraGeometry>& resolvedGeometry,
                                  QWidget* parent = nullptr);
 
     QString target() const;
@@ -55,7 +66,6 @@ public:
     QStringList videoFiles() const;  // exactly count() entries, in order
     std::vector<int> camIds() const; // exactly count() entries, in order, parallel to videoFiles()
     bool injectOnly() const;
-    bool qcxBypass() const;
     // Empty blfPath() means BLF/Ethernet replay is disabled for this
     // session -- MainWindow checks that, not a separate "enabled" flag.
     QString blfPath() const;
@@ -71,6 +81,11 @@ private slots:
 
 private:
     void updateRowVisibility();
+    // Sets rows_[row].resolvedLabel's text from resolvedGeometry_,
+    // looked up by that row's CURRENT camIdSpin value -- called once at
+    // construction per row and again on that row's own camIdSpin
+    // valueChanged.
+    void updateResolvedLabel(int row);
 
     QLineEdit* targetEdit_ = nullptr;
     QSpinBox* controlPortSpin_ = nullptr;
@@ -79,15 +94,17 @@ private:
     QPushButton* sshKeyBrowseButton_ = nullptr;
     QSpinBox* countSpin_ = nullptr;
     QCheckBox* injectOnlyCheck_ = nullptr;
-    QCheckBox* qcxBypassCheck_ = nullptr;
 
     struct Row {
         QWidget* container = nullptr;
         QLineEdit* pathEdit = nullptr;
         QPushButton* browseButton = nullptr;
         QSpinBox* camIdSpin = nullptr;
+        // Read-only, purely informational -- see updateResolvedLabel().
+        QLabel* resolvedLabel = nullptr;
     };
     Row rows_[camsyringe::kMaxCameras];
+    QMap<int, camsyringe::ResolvedCameraGeometry> resolvedGeometry_;
 
     QCheckBox* blfEnabledCheck_ = nullptr;
     QWidget* blfRowContainer_ = nullptr;

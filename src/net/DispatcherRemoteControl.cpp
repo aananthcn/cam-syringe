@@ -97,11 +97,24 @@ bool DispatcherRemoteControl::ensureRunning(TargetSsh& ssh, const QString& targe
     // control port coming up is the only thing that actually matters --
     // an ssh-side timeout alone must never be reported as failure while
     // the dispatcher is demonstrably fine.
-    if (pollControlPort(target, controlPort, 10000)) {
+    // 40s, not the 10s this used to be: CONFIRMED live as a real bug, not
+    // just theoretical -- a fresh Install Injector's post-install restart
+    // reported failure ("didn't come up within 10s") while qcarcam_dispatcher
+    // was, moments later, demonstrably running fine and its control port
+    // accepting connections. Root cause, read directly from
+    // run_qcarcam.sh's own source: on a cold start (display service not
+    // already up -- exactly the case right after a fresh flash/reboot,
+    // which an Install is disproportionately likely to follow) it waits
+    // up to a HARD 30s for /dev/openwfd_server_0 before it EVER starts
+    // qcarcam_dispatcher at all, so a 10s poll here can, and did, give up
+    // while the dispatcher hadn't even been spawned yet. 40s covers that
+    // 30s worst case plus margin for the dispatcher itself to actually
+    // bind its socket afterward.
+    if (pollControlPort(target, controlPort, 40000)) {
         return true;
     }
     if (error) {
-        *error = r.ok() ? "qcarcam_dispatcher didn't come up within 10s of starting it."
+        *error = r.ok() ? "qcarcam_dispatcher didn't come up within 40s of starting it."
                          : "Couldn't start qcarcam_dispatcher on the target: " + r.stdErr;
     }
     return false;
