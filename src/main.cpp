@@ -13,7 +13,12 @@
 
 namespace {
 
-constexpr const char* kDefaultTarget = "192.168.1.1";
+// IPv6, not IPv4: this project's actual bench target lives on an
+// IPv6-only VLAN segment (fd53:7cb8:383:2::172) -- there's no IPv4
+// fallback address to default to instead, so the harder-to-type IPv6
+// literal is the one worth hardcoding, still overridable via --target
+// or Configure either way.
+constexpr const char* kDefaultTarget = "fd53:7cb8:383:2::172";
 constexpr const char* kDefaultSshUser = "root";
 constexpr int kDefaultControlPort = 5000;
 constexpr int kMinCamId = 1;

@@ -48,14 +48,22 @@ QStringList keyOpts(const QString& keyPath) {
 }
 
 // Same logic as TcpConnect.h's bracketHostIfIPv6, QString-native since
-// this whole file works in QString throughout -- needed wherever
-// `target` gets concatenated into a "user@host" or "user@host:path"
-// ssh/scp ARGUMENT: an IPv6 literal's own colons are otherwise
-// indistinguishable from the host:port/host:path separator (scp's
-// legacy syntax in particular cannot be parsed at all without this for
-// an IPv6 target). Deliberately never applied to `target` itself where
+// this whole file works in QString throughout. IMPORTANT: this is an
+// scp()-ONLY helper, not a general ssh-destination one -- confirmed via
+// `ssh -G user@[ipv6]` vs `ssh -G user@ipv6` (OpenSSH 10.2): scp's
+// legacy `user@host:path` syntax genuinely needs the brackets to tell
+// an IPv6 literal's own colons apart from the host:path separator, but
+// plain ssh's `user@host` destination (no trailing `:port`) does NOT --
+// OpenSSH only strips the brackets back off when a `:port` follows
+// them, so `ssh user@[fd53::1]` with no port resolves the LITERAL
+// string "[fd53::1]" as a hostname and fails with "Could not resolve
+// hostname [fd53::1]", while `ssh user@fd53::1` (unbracketed) resolves
+// fine -- ssh's destination parser splits only on the first `@`, never
+// on colons, so no bracketing is needed there at all. Bitten by this
+// for real: run()/ensureAuth() used to call this too and broke every
+// IPv6 target. Deliberately never applied to `target` itself where
 // it's used as the auth cache key (authByTarget_) -- only to the text
-// actually handed to the ssh/scp process.
+// actually handed to the scp process.
 QString bracketIfIPv6(const QString& host) { return host.contains(':') ? "[" + host + "]" : host; }
 
 // Real-world trigger, not a hypothetical: this project's own QNX target
@@ -149,9 +157,12 @@ bool TargetSsh::ensureAuth(const QString& target, const QString& defaultUser,
     // (default agent/identity already trusted) and "use this specific
     // key" (defaultKeyPath set) -- same probe either way, see keyOpts()'s
     // own comment.
+    // No bracketIfIPv6 here -- see that function's own comment: plain
+    // ssh destinations must NOT be bracketed (only scp's legacy path
+    // syntax needs it), or an IPv6 target fails hostname resolution.
     QStringList probeArgs = commonSshOpts();
     probeArgs << keyOpts(defaultKeyPath) << "-o"
-              << "BatchMode=yes" << (auth.user + "@" + bracketIfIPv6(target)) << "true";
+              << "BatchMode=yes" << (auth.user + "@" + target) << "true";
     // See looksLikeHostKeyChanged()'s own comment: a stale known_hosts
     // entry for this target (routine after a reboot/reflash on this
     // project) makes the probe fail for a reason credentials can never
@@ -209,8 +220,9 @@ TargetSsh::Result TargetSsh::run(const QString& target, const QString& remoteCom
     if (!lookupAuth(target, &auth)) {
         return {-1, QString(), "ensureAuth() was not called (or failed) for " + target};
     }
+    // No bracketIfIPv6 here either -- see its own comment (scp()-only).
     QStringList args = commonSshOpts();
-    args << keyOpts(auth.keyPath) << (auth.user + "@" + bracketIfIPv6(target)) << remoteCommand;
+    args << keyOpts(auth.keyPath) << (auth.user + "@" + target) << remoteCommand;
     RunResult r = runWithHostKeyRetry("ssh", args, auth.env, timeoutMs, target);
     return {r.exitCode, r.stdOut, r.stdErr};
 }

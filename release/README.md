@@ -139,6 +139,24 @@ launcher into one `.zip` a teammate downloads and double-clicks:
 See `release/windows/README.md` for the full picture, including the
 **untested on real Windows hardware** caveat.
 
+### SSH auth to the target
+
+You do **not** need to pre-install an SSH public key on the target. "Install
+Injector" (and every other target action -- Configure's camera discovery,
+Restart, etc.) goes through the same `TargetSsh` helper, which tries a
+passwordless connection first (an already-trusted key/agent identity, or
+`Camera Configs`'s configured SSH key) and, if that fails, pops a
+username/password dialog and authenticates with that instead (no key ever
+required). `root` is the default username if you don't set one.
+
+The target's SSH host key is expected to change on every reboot/reflash
+(routine for this project's QNX target) -- CamSyringe detects that case and
+runs the equivalent of `ssh-keygen -R <target>` on your behalf before
+retrying, so a stale `known_hosts` entry won't block you either.
+
+IPv6 targets (e.g. `fd53:7cb8:383:2::172`) are supported -- enter the bare
+address, no brackets needed anywhere in the UI.
+
 ### Packaging the injector bundle alongside it
 
 CamSyringe's "Install Injector" menu action pushes a

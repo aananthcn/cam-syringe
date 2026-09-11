@@ -61,13 +61,13 @@ Camera streaming and everything else works fine without this; it's only needed i
              [<video1> [<video2> <video3> <video4>]]
 ```
 
-Every argument is optional, EXCEPT `--cam-ids`, which becomes required the moment any video files are given (comma-separated QCarCam ids, same order as the video files — a dash within one entry expands to an inclusive range, e.g. `1-3,8` means `1,2,3,8`; each id must be unique). Ports are assigned automatically in order: 5004, 5006, 5008, 5010. `--target` defaults to `192.168.1.1`; an optional `user@` prefix is accepted (and ignored) so you can paste the same address you SSH to the target with. `--control-port` (default 5000) is `qcarcam_dispatcher`'s control-channel port on the target. `--inject-only` is forwarded to the target's declaration (see `qcarcam-injector`'s own `ARCHITECTURE.md` items 29-31 for what it does). `--blf-file`/`--blf-interface` enable BLF/Ethernet replay (see below). Run with no arguments at all and the window opens with the **Configure** dialog already up, so you can set everything from the UI instead. `--playall` starts streaming immediately on launch instead of waiting for a Play click — it requires at least one video file also be given.
+Every argument is optional, EXCEPT `--cam-ids`, which becomes required the moment any video files are given (comma-separated QCarCam ids, same order as the video files — a dash within one entry expands to an inclusive range, e.g. `1-3,8` means `1,2,3,8`; each id must be unique). Ports are assigned automatically in order: 5004, 5006, 5008, 5010. `--target` defaults to `fd53:7cb8:383:2::172` (the project's standard bench target, on an IPv6-only VLAN — deliberately hardcoded as the default since it's the address nobody wants to retype); an optional `user@` prefix is accepted (and ignored) so you can paste the same address you SSH to the target with. `--control-port` (default 5000) is `qcarcam_dispatcher`'s control-channel port on the target. `--inject-only` is forwarded to the target's declaration (see `qcarcam-injector`'s own `ARCHITECTURE.md` items 29-31 for what it does). `--blf-file`/`--blf-interface` enable BLF/Ethernet replay (see below). Run with no arguments at all and the window opens with the **Configure** dialog already up, so you can set everything from the UI instead. `--playall` starts streaming immediately on launch instead of waiting for a Play click — it requires at least one video file also be given.
 
 Examples:
 
 ```
 ./camsyringe                                                          # opens the Configure dialog on launch
-./camsyringe --target root@192.168.1.1 --cam-ids 8,9 cam-front.mp4 cam-rear.mp4
+./camsyringe --target root@fd53:7cb8:383:2::172 --cam-ids 8,9 cam-front.mp4 cam-rear.mp4
 ./camsyringe --cam-ids 8,9 --playall cam-front.mp4 cam-rear.mp4       # streams immediately, no click needed
 ./camsyringe --blf-file capture.blf --blf-interface eth0             # BLF replay only, no cameras (via Configure)
 ```
