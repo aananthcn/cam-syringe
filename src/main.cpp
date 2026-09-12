@@ -1,5 +1,6 @@
 #include "camera/PortScheme.h"
 #include "camera/StreamPool.h"
+#include "net/TargetDefaults.h"
 #include "net/TcpConnect.h"
 #include "ui/MainWindow.h"
 
@@ -13,12 +14,27 @@
 
 namespace {
 
-// IPv6, not IPv4: this project's actual bench target lives on an
-// IPv6-only VLAN segment (fd53:7cb8:383:2::172) -- there's no IPv4
-// fallback address to default to instead, so the harder-to-type IPv6
-// literal is the one worth hardcoding, still overridable via --target
-// or Configure either way.
-constexpr const char* kDefaultTarget = "fd53:7cb8:383:2::172";
+// TEMPORARY, interim default while this board's IPv6 socket creation is
+// broken at the platform level (confirmed not a qcarcam_dispatcher/
+// CamSyringe bug -- a from-scratch AF_INET6 socket() call fails
+// identically outside any of this project's code; fix is a board OS
+// image upgrade, blocked on the target's own USB update tool, status
+// unknown until 2026-09-15 or later). The board's real bench address is
+// still the IPv6 one (kDefaultTargetIPv6, its own VLAN segment) --
+// kDefaultTargetIPv4 is usable as a fallback specifically because
+// qcarcam_dispatcher's control-channel socket still works fine over IPv4
+// on this exact board (confirmed: --ipv4 succeeds instantly where the
+// IPv6 default doesn't). See net/TargetDefaults.h for why that constant
+// is 192.168.1.1 and not this bench's own live address.
+//
+// No code needs to "know" which family is in play beyond this default:
+// bracketHostIfIPv6() below, CameraConfigDialog's "Force IPv4" checkbox,
+// and DispatcherRemoteControl's own family selection all derive it
+// purely from whether whatever target string is in play (this default,
+// --target, or Configure's target field) contains a ':' -- so switching
+// back to the IPv6 default here (once the board is fixed) is the only
+// change this workaround needs reverting.
+constexpr const char* kDefaultTarget = camsyringe::kDefaultTargetIPv4;
 constexpr const char* kDefaultSshUser = "root";
 constexpr int kDefaultControlPort = 5000;
 constexpr int kMinCamId = 1;

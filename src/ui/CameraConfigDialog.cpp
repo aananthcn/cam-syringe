@@ -1,5 +1,7 @@
 #include "ui/CameraConfigDialog.h"
 
+#include "net/TargetDefaults.h"
+
 #include <algorithm>
 #include <set>
 
@@ -101,6 +103,27 @@ CameraConfigDialog::CameraConfigDialog(const QString& initialTarget, int initial
 
     targetEdit_ = new QLineEdit(initialTarget, this);
     form->addRow(tr("Target:"), targetEdit_);
+
+    // Interim, this release: this board's IPv6 socket creation is broken
+    // at the platform level (confirmed not a qcarcam_dispatcher/
+    // CamSyringe bug -- see main.cpp's own comment on kDefaultTarget), so
+    // IPv4 is the working default for now. This checkbox is a pure
+    // convenience -- toggling it just rewrites the Target field above to
+    // one of the two known default addresses; it's never read anywhere
+    // else. The actual family used everywhere (the control-channel
+    // connection, and which flag DispatcherRemoteControl passes
+    // run_qcarcam.sh) is still derived purely from whatever ends up in
+    // Target itself (does it contain a ':'), exactly as before this
+    // checkbox existed -- so it can never silently disagree with a
+    // manually-typed target. Initial state mirrors initialTarget for the
+    // same reason (checked iff it doesn't look like an IPv6 literal),
+    // which is why this starts checked on a fresh launch: kDefaultTarget
+    // is kDefaultTargetIPv4 for now.
+    forceIpv4Check_ = new QCheckBox(tr("Force IPv4"), this);
+    forceIpv4Check_->setChecked(!initialTarget.contains(':'));
+    connect(forceIpv4Check_, &QCheckBox::stateChanged, this,
+            &CameraConfigDialog::onForceIpv4Changed);
+    form->addRow(QString(), forceIpv4Check_);
 
     controlPortSpin_ = new QSpinBox(this);
     controlPortSpin_->setRange(1, 65535);
@@ -303,6 +326,11 @@ void CameraConfigDialog::onBlfBrowseClicked() {
 
 void CameraConfigDialog::onBlfEnabledChanged(int) {
     blfRowContainer_->setVisible(blfEnabledCheck_->isChecked());
+}
+
+void CameraConfigDialog::onForceIpv4Changed(int) {
+    targetEdit_->setText(forceIpv4Check_->isChecked() ? camsyringe::kDefaultTargetIPv4
+                                                        : camsyringe::kDefaultTargetIPv6);
 }
 
 void CameraConfigDialog::onAccept() {

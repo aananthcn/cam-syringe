@@ -240,6 +240,22 @@ private:
     // (leaves state at Blind) if currentTarget_ is empty or a
     // query/toggle is already in flight (shimBusy_).
     void refreshShimStatus();
+    // Best-effort, passwordless-only (same convention as
+    // refreshShimStatus() just above -- an automatic check, not a
+    // deliberate user action, must never prompt for credentials) live
+    // functional check of whether `target` would hit this board's known
+    // AF_INET6 socket-creation issue (net/Ipv6SupportProbe.h, docs/adr/
+    // 0001-interim-ipv4-default-while-board-ipv6-broken.md) -- only runs
+    // at all when `target` looks like an IPv6 literal (contains ':'),
+    // since the known issue is IPv6-specific and an IPv4 target can
+    // never hit it. Fire-and-forget: posts a status-bar warning via
+    // showGeneralStatus() if the probe conclusively finds the issue,
+    // otherwise does nothing (no "all clear" message either -- silence
+    // is the normal, expected state). A stale in-flight probe from a
+    // target the user has since changed away from is discarded (checked
+    // against currentTarget_ when the result comes back), never shown
+    // against the wrong target.
+    void maybeWarnAboutIpv6(const QString& target);
     // Double-click handler for shimStatusLabel_ (see eventFilter()) --
     // a no-op while shimState_ is Blind (nothing confirmed to toggle
     // relative to -- explicit requirement, not an oversight). Otherwise

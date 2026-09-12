@@ -5,6 +5,8 @@
 #include "net/DispatcherRemoteControl.h"
 #include "net/DispatcherVersionProbe.h"
 #include "net/InjectorBundleInstaller.h"
+#include "net/Ipv6SupportProbe.h"
+#include "net/RealRefSync.h"
 #include "net/TcpConnect.h"
 #include "ui/CameraConfigDialog.h"
 #include "ui/CameraSettingsDialog.h"
@@ -841,6 +843,7 @@ void MainWindow::onConfigureTriggered() {
     // the wrong box.
     applyShimState(ShimState::Blind);
     refreshShimStatus();
+    maybeWarnAboutIpv6(currentTarget_);
     blfPath_ = dialog.blfPath();
     blfInterface_ = dialog.blfInterface();
     QStringList files = dialog.videoFiles();
@@ -1225,6 +1228,33 @@ void MainWindow::refreshShimStatus() {
     }).detach();
 }
 
+void MainWindow::maybeWarnAboutIpv6(const QString& target) {
+    if (!target.contains(':')) {
+        return; // not an IPv6 literal -- this known issue is IPv6-specific
+    }
+    camsyringe::Ipv6SupportProbe::checkAsync(
+        sshSession_, target, sshUser_, sshKeyPath_,
+        [this, target](bool ok, bool broken) {
+            QMetaObject::invokeMethod(
+                this,
+                [this, target, ok, broken]() {
+                    if (currentTarget_ != target) {
+                        return; // stale -- user has since changed the target again
+                    }
+                    if (ok && broken) {
+                        showGeneralStatus(
+                            tr("Warning: %1 appears to hit this board's known IPv6 "
+                               "socket-creation issue -- qcarcam_dispatcher's control channel "
+                               "will likely fail to start. Consider an IPv4 target (Configure's "
+                               "\"Force IPv4\") until the board is fixed.")
+                                .arg(target),
+                            /*isError=*/true);
+                    }
+                },
+                Qt::QueuedConnection);
+        });
+}
+
 void MainWindow::toggleShimStatus() {
     // Explicit requirement: double-clicks are ignored entirely while
     // Blind -- not connected, never queried, or a query/toggle is
@@ -1283,11 +1313,16 @@ void MainWindow::toggleShimStatus() {
             // been already -- never overwrite an existing backup with a
             // second rename (would otherwise clobber the one true REAL
             // copy if this ever ran twice in a row without a REAL toggle
-            // between).
+            // between). Then refresh the real-ref reference copy from
+            // whichever board file is genuine right now (net/RealRefSync.h)
+            // -- unconditional every toggle, unlike the backup rename,
+            // since this one has no "clobbering the one true copy" risk.
             QString cmd = QString("%1; [ -e %2 ] || { echo %3; exit 1; }; "
-                                   "[ -e %4 ] || mv %5 %4; cp %2 %5 && chmod 555 %5")
+                                   "[ -e %4 ] || mv %5 %4; "
+                                   "%6; "
+                                   "cp %2 %5 && chmod 555 %5")
                                .arg(kRemountRw, kShimOnTargetPath, kShimMissingMarker, kRealLibBackupPath,
-                                    kRealLibPath);
+                                    kRealLibPath, camsyringe::realRefSyncCommand());
             auto res = sshSession_.run(target, cmd, 15000);
             if (res.ok()) {
                 finalState = ShimState::Shim;

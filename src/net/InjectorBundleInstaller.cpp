@@ -1,6 +1,7 @@
 #include "net/InjectorBundleInstaller.h"
 
 #include "net/DispatcherRemoteControl.h"
+#include "net/RealRefSync.h"
 #include "net/TargetSsh.h"
 
 #include <QFileInfo>
@@ -73,6 +74,20 @@ void InjectorBundleInstaller::installAsync(TargetSsh& ssh, QString target, int c
             onDone(false, "Install failed: " + install.stdErr);
             return;
         }
+
+        progress(85, "Refreshing real-camera reference library on " + target + "...");
+        // Best-effort, not fatal on failure -- see net/RealRefSync.h's own
+        // comment for why this needs to run after every install
+        // regardless of the board's current REAL/SHIM state:
+        // CameraGeometryResolver's own per-camera resolution discovery
+        // depends on real-ref being fresh and board-correct independently
+        // of whether the SHIM/REAL toggle has ever been used this
+        // session at all. Discovery itself already handles a missing/
+        // broken real-ref gracefully (falls back to no resolution rather
+        // than crashing, see that class's own comment), so this install
+        // flow shouldn't block on it either -- deliberately not checked
+        // against ok(), unlike every other step above.
+        ssh.run(target, camsyringe::realRefSyncCommand(), 15000);
 
         progress(90, "Restarting qcarcam_dispatcher on " + target + "...");
         // Restart so the new binary actually takes effect -- no separate

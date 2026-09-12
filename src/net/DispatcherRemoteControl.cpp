@@ -59,11 +59,27 @@ bool pollControlPort(const QString& target, int controlPort, int totalTimeoutMs)
 // invocation -- see commonSshOpts(), no `-t` -- so there's no
 // controlling terminal to send SIGHUP on session close in the first
 // place; `nohup` alone is defensive insurance, not load-bearing here.)
-const char* kStartCommand =
-    "if ! pidin | grep -qi qcarcam_dispatcher; then "
-    "sh -c '. /var/opt/env.sh && exec run_qcarcam.sh' "
-    ">/tmp/qcarcam_dispatcher.log 2>&1 </dev/null & "
-    "fi";
+// `--ipv4` is appended whenever `target` doesn't look like an IPv6
+// literal (same "contains a ':'" check as TcpConnect.h's
+// bracketHostIfIPv6/TargetSsh.cpp's bracketIfIPv6, deliberately not
+// shared into a named predicate here since this is the only spot that
+// needs the family for a *decision* rather than for string formatting)
+// -- so run_qcarcam.sh/qcarcam_dispatcher always bind the same family
+// CamSyringe is about to connect the control channel on. This is an
+// interim workaround for this board's IPv6 socket creation being broken
+// at the platform level (confirmed not a qcarcam_dispatcher/CamSyringe
+// bug -- see run_qcarcam.sh's own header); once fixed, IPv6 targets go
+// back to needing nothing special here at all, since that was always
+// qcarcam_dispatcher's own default.
+QString buildStartCommand(const QString& target) {
+    QString runCmd = target.contains(':') ? "run_qcarcam.sh" : "run_qcarcam.sh --ipv4";
+    return "if ! pidin | grep -qi qcarcam_dispatcher; then "
+           "sh -c '. /var/opt/env.sh && exec " +
+           runCmd +
+           "' "
+           ">/tmp/qcarcam_dispatcher.log 2>&1 </dev/null & "
+           "fi";
+}
 
 // All four binaries -- a running dispatcher may have spawned
 // qcarcam_injector/qcarcam_receiver per camera plus a qcarcam_viewer
@@ -82,7 +98,7 @@ const char* kKillAllCommand =
 
 bool DispatcherRemoteControl::ensureRunning(TargetSsh& ssh, const QString& target, int controlPort,
                                              QString* error) {
-    TargetSsh::Result r = ssh.run(target, kStartCommand, 15000);
+    TargetSsh::Result r = ssh.run(target, buildStartCommand(target), 15000);
     // Poll the control port regardless of r.ok() -- confirmed for real
     // that the ssh client itself can time out here ("ssh did not
     // complete in time") even though the remote start actually

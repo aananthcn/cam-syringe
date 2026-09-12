@@ -77,6 +77,7 @@ private slots:
     void onSshKeyBrowseClicked();
     void onBlfBrowseClicked();
     void onBlfEnabledChanged(int state);
+    void onForceIpv4Changed(int state);
     void onAccept();
 
 private:
@@ -88,6 +89,14 @@ private:
     void updateResolvedLabel(int row);
 
     QLineEdit* targetEdit_ = nullptr;
+    // "Force IPv4" -- purely a convenience that rewrites targetEdit_ to
+    // one of the two known default addresses (net/TargetDefaults.h) when
+    // toggled; never read directly elsewhere. The actual IPv4-vs-IPv6
+    // choice everywhere else (bracketHostIfIPv6, DispatcherRemoteControl's
+    // own --ipv4 selection) is still derived purely from whatever target()
+    // string ends up in play, so this checkbox can never silently
+    // disagree with a manually-typed target.
+    QCheckBox* forceIpv4Check_ = nullptr;
     QSpinBox* controlPortSpin_ = nullptr;
     QLineEdit* sshUserEdit_ = nullptr;
     QLineEdit* sshKeyPathEdit_ = nullptr;

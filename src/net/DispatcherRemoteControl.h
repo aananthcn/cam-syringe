@@ -29,7 +29,12 @@ public:
     // (whole start subshell redirected+backgrounded, not just the final
     // command -- see kStartCommand's own comment in the .cpp for why that
     // scope matters, confirmed for real) via /var/opt/env.sh +
-    // run_qcarcam.sh. Success/failure is decided ENTIRELY by polling the
+    // run_qcarcam.sh -- passing run_qcarcam.sh's own --ipv4 flag
+    // automatically whenever `target` isn't an IPv6 literal (see
+    // buildStartCommand() in the .cpp), so the dispatcher always binds
+    // the same family CamSyringe is about to connect on; no separate
+    // setting for this anywhere, it's derived purely from the target
+    // address already given. Success/failure is decided ENTIRELY by polling the
     // control port for up to ~40s afterward, not by whether the ssh
     // command itself returned cleanly -- confirmed for real that ssh can
     // time out here while the dispatcher still comes up fine; only report
