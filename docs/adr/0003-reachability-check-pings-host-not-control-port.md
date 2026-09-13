@@ -50,3 +50,10 @@ auto-stops the session (`MainWindow::autoStopOnUnreachable()`).
   the bound) is treated as reachable=true, never as a false negative —
   same contract `quickPingUnreachable()` already documented for
   `TargetSsh`'s own use of it.
+
+**Implementation note (this decision itself is unchanged)**: the
+standalone `TargetReachabilityProbe` this ADR originally described no
+longer exists as its own class — its one-shot ping became
+`TargetConnectivityMonitor`, a shared, continuously-running version of
+the same check that this feature and the SHIM/REAL status feature now
+both depend on. See [ADR 0005](0005-shared-target-connectivity-monitor.md).

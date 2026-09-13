@@ -8,7 +8,7 @@
 #include "net/Ipv6SupportProbe.h"
 #include "net/QcxVersionProbe.h"
 #include "net/RealRefSync.h"
-#include "net/TargetReachabilityProbe.h"
+#include "net/TargetConnectivityMonitor.h"
 #include "net/TcpConnect.h"
 #include "ui/CameraConfigDialog.h"
 #include "ui/CameraSettingsDialog.h"
@@ -300,8 +300,32 @@ MainWindow::MainWindow(camsyringe::StreamPool* pool, QString initialTarget, int 
 
     rebuildGrid();
     applyState(PlaybackState::Idle);
+    connectivityMonitor_.setStateChangedCallback(
+        [this](camsyringe::TargetConnectivityMonitor::State) {
+            // Re-check SHIM/REAL immediately on any connectivity
+            // transition, rather than waiting up to a further ~1s for
+            // shimStatusTimer_'s own next tick -- see
+            // refreshShimStatus()'s own gating on connectivityMonitor_.
+            refreshShimStatus();
+        });
     if (!currentTarget_.isEmpty()) {
+        connectivityMonitor_.start(currentTarget_);
         refreshShimStatus();
+        // Confirmed live as a real gap: maybeWarnAboutQcxVersion() used
+        // to run ONLY from onConfigureTriggered(), so a session launched
+        // with a target/camera config already in hand (CLI args, and
+        // especially --playall, which calls startStreaming() directly
+        // below BEFORE Configure is ever touched) never triggered this
+        // probe at all -- qcxVersionMismatch_ stayed at its default
+        // false for the WHOLE session, silently disabling the
+        // "block Play / auto-stop an already-Playing session when
+        // --inject-only and the board's real QCX driver is version-
+        // mismatched" requirement (qcarcam-injector's docs/adr/0002)
+        // for exactly the launch style used throughout this project's
+        // own testing. Mirrors refreshShimStatus()'s own startup call
+        // just above -- same "probe once at launch if a target is
+        // already configured" convention.
+        maybeWarnAboutQcxVersion(currentTarget_);
     }
 
     // Periodic re-check -- see shimStatusTimer_'s own comment for why
@@ -530,12 +554,18 @@ void MainWindow::beginReachabilityCheck() {
     }
     reachabilityTimeoutTimer_->start(kReachabilityTimeoutMs);
 
-    camsyringe::TargetReachabilityProbe::checkAsync(
-        currentTarget_.toStdString(), [this, token](bool reachable) {
-            QMetaObject::invokeMethod(
-                this, [this, token, reachable]() { onReachabilityCheckResult(reachable, token); },
-                Qt::QueuedConnection);
-        });
+    // probeNow() answers synchronously, right here on this call stack, if
+    // connectivityMonitor_ already has a confirmed Reachable/Unreachable
+    // answer -- the common case, since it's been ticking since launch or
+    // the last Configure apply. Only genuinely waits (via its own
+    // internally-marshaled callback, still GUI-thread, no extra
+    // invokeMethod needed here) when caught at Unknown -- Play pressed
+    // within the first ~1-2s after start(), before its first probe
+    // resolved.
+    connectivityMonitor_.probeNow([this, token](camsyringe::TargetConnectivityMonitor::State state) {
+        onReachabilityCheckResult(state == camsyringe::TargetConnectivityMonitor::State::Reachable,
+                                   token);
+    });
 }
 
 void MainWindow::onReachabilityCheckResult(bool reachable, int token) {
@@ -984,10 +1014,15 @@ void MainWindow::onConfigureTriggered() {
     sshKeyPath_ = dialog.sshKeyPath();
     injectOnly_ = dialog.injectOnly();
     // Configure may have pointed at a different target entirely -- last
-    // known SHIM/REAL state belonged to the PREVIOUS target, not this one.
+    // known SHIM/REAL state (and connectivityMonitor_'s own Reachable/
+    // Unreachable answer) belonged to the PREVIOUS target, not this one.
     // Drop it and query fresh rather than showing a stale answer against
-    // the wrong box.
+    // the wrong box. connectivityMonitor_.start() resets to Unknown
+    // immediately; refreshShimStatus() will see that and show Blind until
+    // the fresh probe (kicked off by start() itself, not waiting for the
+    // next 1s tick) resolves and its state-changed callback re-runs it.
     applyShimState(ShimState::Blind);
+    connectivityMonitor_.start(currentTarget_);
     refreshShimStatus();
     maybeWarnAboutIpv6(currentTarget_);
     // Reset BEFORE the fresh probe for this (possibly new) target even
@@ -1353,6 +1388,23 @@ void MainWindow::refreshShimStatus() {
             std::fprintf(stderr, "[shimstatus] tick skipped (target empty=%d, busy=%d)\n",
                          currentTarget_.isEmpty() ? 1 : 0, shimBusy_ ? 1 : 0);
         }
+        return;
+    }
+    // BLIND is now DERIVED from connectivityMonitor_ (see ADR 0005, and
+    // its own class comment) -- no point spending an SSH round-trip (and
+    // ensureAuth()'s own ~1-8s worst case) on a target that a plain ping
+    // has already, more cheaply, shown isn't there. Unknown (the probe
+    // hasn't resolved yet -- only possible very briefly after
+    // start()/onConfigureTriggered(), since start() itself kicks off a
+    // probe immediately) is treated the same as Unreachable here: nothing
+    // confirmed yet, so nothing to show but BLIND; the state-changed
+    // callback re-runs this the moment it resolves either way.
+    if (connectivityMonitor_.state() != camsyringe::TargetConnectivityMonitor::State::Reachable) {
+        if (shimStatusDebugEnabled()) {
+            std::fprintf(stderr, "[shimstatus] tick skipped (target not Reachable per "
+                                  "connectivityMonitor_)\n");
+        }
+        applyShimState(ShimState::Blind);
         return;
     }
     shimBusy_ = true;

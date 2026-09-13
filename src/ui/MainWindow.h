@@ -12,6 +12,7 @@
 #include "blf/BlfReplayer.h"
 #include "net/CameraGeometryResolver.h"
 #include "net/DispatcherClient.h"
+#include "net/TargetConnectivityMonitor.h"
 #include "net/TargetSsh.h"
 
 class QGridLayout;
@@ -156,21 +157,27 @@ private:
     // Hard, dedicated pre-flight gate in front of declareToTarget()/
     // checkInjectorVersion() (called from startStreaming(), and nowhere
     // else) -- NOT in front of pool_->startAll(), which already ran by the
-    // time this is called. Fires a TargetReachabilityProbe (a ping, see
-    // its own class comment for why NOT a control-port connect) and
-    // starts reachabilityTimeoutTimer_ (kReachabilityTimeoutMs) as a
-    // belt-and-suspenders UI-facing cutoff for it; shows a "searching"
-    // status-bar message for the whole window (see showGeneralStatus()).
-    // Whichever comes first -- the probe's own result
-    // (onReachabilityCheckResult()) or the timer elapsing (calls
-    // autoStopOnUnreachable() directly) -- decides the outcome; the other
-    // is then stale and ignored (see reachabilityCheckToken_'s own
-    // comment).
+    // time this is called. Asks connectivityMonitor_.probeNow() (a ping,
+    // see its own class comment for why NOT a control-port connect --
+    // shared with refreshShimStatus(), see ADR 0005) and starts
+    // reachabilityTimeoutTimer_ (kReachabilityTimeoutMs) as a belt-and-
+    // suspenders UI-facing cutoff for it; shows a "searching" status-bar
+    // message for the whole window (see showGeneralStatus()). Whichever
+    // comes first -- the probe's own result (onReachabilityCheckResult())
+    // or the timer elapsing (calls autoStopOnUnreachable() directly) --
+    // decides the outcome; the other is then stale and ignored (see
+    // reachabilityCheckToken_'s own comment). probeNow() answers
+    // synchronously, on this same call stack, whenever connectivityMonitor_
+    // already has a confirmed answer (the common case -- it's been
+    // ticking since launch/Configure) -- the "searching" phase is only
+    // ever actually visible for the rare Unknown case (Play pressed
+    // within ~1-2s of launch/Configure, before its first probe resolved).
     void beginReachabilityCheck();
-    // GUI thread only -- invoked (via QMetaObject::invokeMethod from
-    // TargetReachabilityProbe's background thread) once that probe
-    // resolves. Discards a stale result (see reachabilityCheckToken_'s own
-    // comment) rather than acting on it. reachable==false hands off to
+    // GUI thread only -- invoked (via connectivityMonitor_.probeNow()'s
+    // own callback, itself always GUI-thread-marshaled) once a
+    // connectivity answer is available, immediately or otherwise.
+    // Discards a stale result (see reachabilityCheckToken_'s own comment)
+    // rather than acting on it. reachable==false hands off to
     // autoStopOnUnreachable() and returns without ever calling
     // declareToTarget()/checkInjectorVersion().
     void onReachabilityCheckResult(bool reachable, int token);
@@ -418,6 +425,14 @@ private:
     // this app session, instead of each separately probing passwordless
     // SSH or prompting for credentials. See TargetSsh's own class comment.
     camsyringe::TargetSsh sshSession_;
+    // Single shared "is currentTarget_ even alive" fact, owned here --
+    // both refreshShimStatus() (BLIND is now DERIVED from this, see its
+    // own comment) and beginReachabilityCheck() depend on it instead of
+    // each running an independent liveness probe (see the class's own
+    // header comment, and ADR 0005). Started/restarted in the
+    // constructor and onConfigureTriggered() whenever currentTarget_ is
+    // set.
+    camsyringe::TargetConnectivityMonitor connectivityMonitor_;
     // Reset at the start of every startStreaming() call (see there) --
     // caps tryStartDispatcherThenRetry() at one attempt per Play press.
     bool dispatcherStartAttempted_ = false;

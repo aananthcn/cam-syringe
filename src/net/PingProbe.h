@@ -8,7 +8,7 @@ namespace camsyringe {
 // seconds -- factored out of TargetSsh.cpp's own original passwordless-
 // probe pre-check (see there for the full "why ping first" rationale)
 // so any other caller needing the same "is this even a plausible address
-// at all" answer (e.g. TargetReachabilityProbe) uses the identical,
+// at all" answer (e.g. TargetConnectivityMonitor) uses the identical,
 // already-proven logic rather than a second, slightly-different
 // reimplementation.
 //

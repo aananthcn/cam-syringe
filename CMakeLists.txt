@@ -85,7 +85,7 @@ add_executable(camsyringe
     src/net/QcxVersionProbe.cpp
     src/net/PingProbe.cpp
     src/net/RealRefSync.cpp
-    src/net/TargetReachabilityProbe.cpp
+    src/net/TargetConnectivityMonitor.cpp
     src/net/TargetSsh.cpp
     src/net/TcpConnect.cpp
     src/orchestrator/Timeline.cpp

@@ -48,3 +48,4 @@ to carry the comment today.
 - [0002. real-ref sync derived from target, not bundle](0002-real-ref-sync-derived-from-target-not-bundle.md)
 - [0003. Play-time reachability check pings the host, not the control port](0003-reachability-check-pings-host-not-control-port.md)
 - [0004. Never synchronously join a stream/network thread from the GUI thread](0004-never-join-stream-thread-from-gui-thread.md)
+- [0005. One shared connectivity monitor, not two independent checks](0005-shared-target-connectivity-monitor.md)
