@@ -20,6 +20,15 @@ struct ResolvedCameraGeometry {
                               // for this id directly
     uint32_t width = 0;
     uint32_t height = 0;
+    // Empty unless resolveAsync() found a SPECIFIC, known reason the live
+    // -query fallback failed for this id (currently: the board's QCX
+    // driver reporting an API version mismatch, see qcarcam-injector's
+    // docs/adr/0002-qcx-client-api-version-must-match-board.md) -- lets
+    // callers show something more useful than a bare "unknown" when a
+    // static XML resolution also wasn't available. Never set just
+    // because ok is false; a generic unreachable-target/timeout failure
+    // leaves this empty, same as before this field existed.
+    QString failureReason;
 };
 
 // Discovers each configured camera's REAL, vehicle-engineer-authored

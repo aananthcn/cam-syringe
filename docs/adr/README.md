@@ -46,3 +46,5 @@ to carry the comment today.
 
 - [0001. Interim IPv4 default while board IPv6 is broken](0001-interim-ipv4-default-while-board-ipv6-broken.md)
 - [0002. real-ref sync derived from target, not bundle](0002-real-ref-sync-derived-from-target-not-bundle.md)
+- [0003. Play-time reachability check pings the host, not the control port](0003-reachability-check-pings-host-not-control-port.md)
+- [0004. Never synchronously join a stream/network thread from the GUI thread](0004-never-join-stream-thread-from-gui-thread.md)

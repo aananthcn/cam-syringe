@@ -82,7 +82,10 @@ add_executable(camsyringe
     src/net/DispatcherVersionProbe.cpp
     src/net/InjectorBundleInstaller.cpp
     src/net/Ipv6SupportProbe.cpp
+    src/net/QcxVersionProbe.cpp
+    src/net/PingProbe.cpp
     src/net/RealRefSync.cpp
+    src/net/TargetReachabilityProbe.cpp
     src/net/TargetSsh.cpp
     src/net/TcpConnect.cpp
     src/orchestrator/Timeline.cpp

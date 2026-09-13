@@ -1,5 +1,7 @@
 #include "net/TargetSsh.h"
 
+#include "net/PingProbe.h"
+
 #include <QFile>
 #include <QFileDevice>
 #include <QProcess>
@@ -151,26 +153,61 @@ bool TargetSsh::ensureAuth(const QString& target, const QString& defaultUser,
     auth.user = defaultUser.isEmpty() ? QStringLiteral("root") : defaultUser;
     auth.env = QProcessEnvironment::systemEnvironment();
 
-    // Passwordless probe -- BatchMode=yes here ONLY (it globally disables
-    // password/askpass querying too, so it must never be set once we're
-    // in password-auth mode below). Covers BOTH "no key needed at all"
-    // (default agent/identity already trusted) and "use this specific
-    // key" (defaultKeyPath set) -- same probe either way, see keyOpts()'s
-    // own comment.
-    // No bracketIfIPv6 here -- see that function's own comment: plain
-    // ssh destinations must NOT be bracketed (only scp's legacy path
-    // syntax needs it), or an IPv6 target fails hostname resolution.
-    QStringList probeArgs = commonSshOpts();
-    probeArgs << keyOpts(defaultKeyPath) << "-o"
-              << "BatchMode=yes" << (auth.user + "@" + target) << "true";
-    // See looksLikeHostKeyChanged()'s own comment: a stale known_hosts
-    // entry for this target (routine after a reboot/reflash on this
-    // project) makes the probe fail for a reason credentials can never
-    // fix -- clear it and retry ONCE before falling through to prompting
-    // for a username/password that would just hit the same wall.
-    RunResult probe = runWithHostKeyRetry("ssh", probeArgs, auth.env, 8000, target);
+    // Skip the passwordless probe entirely if it very recently failed for
+    // this exact target -- see passwordlessProbeFailedUntil_'s own
+    // comment for why (confirmed live: this is what turned one
+    // unreachable target into a 20-30s "stuck" UI, several independent
+    // features each separately re-timing-out the same probe).
+    int probeExitCode = -1;
+    bool skipProbe;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = passwordlessProbeFailedUntil_.find(target);
+        skipProbe = it != passwordlessProbeFailedUntil_.end() &&
+                    std::chrono::steady_clock::now() < it->second;
+    }
 
-    if (probe.exitCode == 0) {
+    // Fast-fail pre-check (see quickPingUnreachable()'s own comment) --
+    // only ever turns "going to fail anyway" into a faster failure, never
+    // skips the real probe just because ping succeeded.
+    if (!skipProbe && quickPingUnreachable(target)) {
+        skipProbe = true; // falls straight into the credentials branch below
+        std::lock_guard<std::mutex> lock(mutex_);
+        passwordlessProbeFailedUntil_[target] = std::chrono::steady_clock::now() +
+                                                 std::chrono::milliseconds(kPasswordlessProbeFailureTtlMs);
+    }
+
+    if (!skipProbe) {
+        // Passwordless probe -- BatchMode=yes here ONLY (it globally
+        // disables password/askpass querying too, so it must never be
+        // set once we're in password-auth mode below). Covers BOTH "no
+        // key needed at all" (default agent/identity already trusted)
+        // and "use this specific key" (defaultKeyPath set) -- same probe
+        // either way, see keyOpts()'s own comment.
+        // No bracketIfIPv6 here -- see that function's own comment:
+        // plain ssh destinations must NOT be bracketed (only scp's
+        // legacy path syntax needs it), or an IPv6 target fails hostname
+        // resolution.
+        QStringList probeArgs = commonSshOpts();
+        probeArgs << keyOpts(defaultKeyPath) << "-o"
+                  << "BatchMode=yes" << (auth.user + "@" + target) << "true";
+        // See looksLikeHostKeyChanged()'s own comment: a stale
+        // known_hosts entry for this target (routine after a
+        // reboot/reflash on this project) makes the probe fail for a
+        // reason credentials can never fix -- clear it and retry ONCE
+        // before falling through to prompting for a username/password
+        // that would just hit the same wall.
+        RunResult probe = runWithHostKeyRetry("ssh", probeArgs, auth.env, 8000, target);
+        probeExitCode = probe.exitCode;
+        if (probeExitCode != 0) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            passwordlessProbeFailedUntil_[target] =
+                std::chrono::steady_clock::now() +
+                std::chrono::milliseconds(kPasswordlessProbeFailureTtlMs);
+        }
+    }
+
+    if (probeExitCode == 0) {
         auth.keyPath = defaultKeyPath;
     } else {
         QString username = auth.user, password;

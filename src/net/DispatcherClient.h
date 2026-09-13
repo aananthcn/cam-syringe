@@ -96,10 +96,24 @@ public:
 
     // Closes the connection -- the target-side teardown signal. Safe to
     // call even if declareAsync() was never called, already completed, or
-    // is still in flight (unblocks the background thread's blocking
-    // socket calls, which then exits promptly). Joins the background
-    // thread before returning, so it's safe to call declareAsync() again
-    // immediately after.
+    // is still in flight. NEVER BLOCKS THE CALLING THREAD -- confirmed
+    // live this session this matters for real: socketFd_ is only set
+    // AFTER connectWithTimeout() inside threadFunc() actually succeeds
+    // (see its own definition), so against an unreachable target,
+    // disconnect() has no live fd to shutdown()+close() yet and nothing
+    // to unblock -- a synchronous join() here used to freeze the ENTIRE
+    // GUI (MainWindow::onStopTriggered() calls this directly on the GUI
+    // thread) for up to that connect's own ~8s timeout, which is what
+    // made the Stop button go unresponsive long enough to look crashed.
+    // Instead, the background thread (if still running) is handed off to
+    // its own detached cleanup thread that joins it there; its eventual
+    // callback (whether from being unblocked by an already-connected
+    // fd's shutdown(), or its own connect timeout elapsing on its own)
+    // still fires, same as before -- MainWindow::onDeclareComplete()
+    // already guards against exactly this via its own state_ check, so a
+    // late callback after a disconnect() is already safe to ignore.
+    // Still safe to call declareAsync() again immediately after this
+    // returns -- thread_ itself is left non-joinable either way.
     void disconnect();
 
 private:
@@ -107,11 +121,17 @@ private:
                      bool injectOnly, DeclareCallback callback);
 
     std::thread thread_;
-    // Set once the socket is created (even before connect() completes) so
-    // disconnect() can shutdown()+close() it from another thread to
-    // unblock whatever blocking call threadFunc() is currently in --
-    // std::atomic since it's written on the background thread and read/
-    // acted on from the GUI thread.
+    // Set only once connectWithTimeout() inside threadFunc() actually
+    // succeeds (NOT while it's still connecting -- there is currently no
+    // way to expose or cancel that in-progress attempt itself, only to
+    // shutdown()+close() an already-established fd) so disconnect() can
+    // shutdown()+close() it from another thread to unblock whatever
+    // blocking call threadFunc() is currently in -- std::atomic since
+    // it's written on the background thread and read/acted on from the
+    // GUI thread. See disconnect()'s own comment for the real
+    // consequence of this: it can't unblock a still-connecting attempt,
+    // which is exactly why disconnect() must never join() synchronously
+    // on its caller's thread either.
     std::atomic<int> socketFd_{-1};
 };
 

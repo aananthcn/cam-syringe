@@ -184,6 +184,14 @@ void CameraGeometryResolver::resolveAsync(TargetSsh& ssh, QString target, QStrin
 
         ResolvedCameraGeometry lastSuccess{};
         bool haveLastSuccess = false;
+        // Checked at most once per resolveAsync() batch, not once per
+        // camera -- if the board's QCX driver has an API version
+        // mismatch (qcarcam-injector's docs/adr/
+        // 0002-qcx-client-api-version-must-match-board.md), it affects
+        // every camera's live query uniformly, so one slog2info check
+        // covers the whole batch instead of repeating it per id.
+        bool checkedQcxVersionReason = false;
+        QString qcxVersionMismatchReason;
 
         for (int id : camIds) {
             ResolvedCameraGeometry geo;
@@ -245,8 +253,20 @@ void CameraGeometryResolver::resolveAsync(TargetSsh& ssh, QString target, QStrin
                                   "if pidin | grep -q qcarcam_test; then slay -f qcarcam_test; "
                                   "sleep 1; fi; "
                                   "cat /mnt/scripts/%1 | sed 's/CAM_INPUT/%2/g' > %3 && "
-                                  "LD_LIBRARY_PATH=%4:$LD_LIBRARY_PATH timeout 8 "
-                                  "./qcarcam_test/qcarcam_test -config=%3; "
+                                  // `timeout` -- confirmed absent anywhere on this board
+                                  // (find / -iname timeout finds nothing; PATH search
+                                  // fails with "cannot execute") -- NOT just this one
+                                  // board's variant, per this project's own established
+                                  // portable-bounding idiom used everywhere else a command
+                                  // needs a hard runtime cap on this target (run_qcarcam.sh's
+                                  // own dispatcher wait, DispatcherRemoteControl, etc.):
+                                  // background + sleep + kill + wait, not `timeout`. Output
+                                  // is never redirected away, so it still flows into this
+                                  // whole command's own captured stdout exactly as a plain
+                                  // foreground run would.
+                                  "LD_LIBRARY_PATH=%4:$LD_LIBRARY_PATH "
+                                  "./qcarcam_test/qcarcam_test -config=%3 & QT_PID=$!; "
+                                  "sleep 8; kill $QT_PID 2>/dev/null; wait $QT_PID 2>/dev/null; "
                                   "rm -f %3")
                                   .arg(xmlFile)
                                   .arg(id)
@@ -258,6 +278,25 @@ void CameraGeometryResolver::resolveAsync(TargetSsh& ssh, QString target, QStrin
                 TargetSsh::Result probeResult = ssh.run(target, cmd, 45000);
                 if (probeResult.ok() && parseQueriedResolution(probeResult.stdOut, id, &w, &h)) {
                     resolved = true;
+                } else if (!checkedQcxVersionReason) {
+                    // The live query just failed for this id -- before
+                    // giving up, check ONCE per batch whether this
+                    // board's qcxserver log shows the known QCX API
+                    // version mismatch (same signature the injector
+                    // shim's own probeRealInputs() diagnostic looks for,
+                    // see QcxClientShim.cpp) as the likely cause, so the
+                    // UI can say something more useful than a bare
+                    // "unknown" to whoever's looking at it.
+                    checkedQcxVersionReason = true;
+                    TargetSsh::Result slog = ssh.run(
+                        target, QStringLiteral("slog2info | grep -i qcarcam | tail -20"), 8000);
+                    if (slog.stdOut.contains(QStringLiteral(
+                            "is not compatible with version of lib_QCXClient"))) {
+                        qcxVersionMismatchReason = QStringLiteral(
+                            "board's QCX driver reports an API version mismatch between this "
+                            "build and the real driver -- see qcarcam-injector's "
+                            "docs/adr/0002-qcx-client-api-version-must-match-board.md");
+                    }
                 }
             }
 
@@ -276,6 +315,7 @@ void CameraGeometryResolver::resolveAsync(TargetSsh& ssh, QString target, QStrin
             } else {
                 geo.ok = false;
                 geo.wasFallback = false;
+                geo.failureReason = qcxVersionMismatchReason; // empty unless found above
             }
 
             results.push_back(geo);

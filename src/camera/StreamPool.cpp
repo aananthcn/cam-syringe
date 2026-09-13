@@ -79,7 +79,35 @@ void StreamPool::stopAll() {
     }
     for (auto& entry : cameras_) {
         if (entry.thread.joinable()) {
-            entry.thread.join();
+            // NEVER thread.join() HERE, on the caller's thread -- confirmed
+            // live, via gdb, as a real GUI freeze: CameraStream::run()'s
+            // av_interleaved_write_frame() call can block indefinitely
+            // (inside ffmpeg's own internals, poll()) writing an RTP
+            // packet to an unreachable destination -- there is no
+            // AVIOContext timeout configured, so this has no bound of its
+            // own. requestStop()'s flag (set just above) is only checked
+            // BETWEEN writes in run()'s own loop, never inside one
+            // already in flight, so it does nothing to unblock this.
+            // MainWindow::stopEverything() calls stopAll() synchronously
+            // on the GUI thread -- including automatically, via
+            // autoStopOnUnreachable(), specifically against a target this
+            // just confirmed is unreachable -- so a blocking join() here
+            // froze the entire window exactly the way
+            // DispatcherClient::disconnect()'s own header comment already
+            // documents for its own, analogous bug. Same fix: hand the
+            // thread off to its own detached cleanup thread instead of
+            // blocking here. `stream` (the CameraStream this thread is
+            // still running) moves into that same lambda so it stays
+            // alive until its own thread actually finishes with it --
+            // nothing outside this lambda references either afterward,
+            // so this is safe even if StreamPool itself is destroyed
+            // (~StreamPool() calls stopAll() too) the moment this
+            // returns.
+            std::thread(
+                [thread = std::move(entry.thread), stream = std::move(entry.stream)]() mutable {
+                    thread.join();
+                })
+                .detach();
         }
     }
     for (auto& entry : cameras_) {

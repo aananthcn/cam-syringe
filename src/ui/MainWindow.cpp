@@ -6,7 +6,9 @@
 #include "net/DispatcherVersionProbe.h"
 #include "net/InjectorBundleInstaller.h"
 #include "net/Ipv6SupportProbe.h"
+#include "net/QcxVersionProbe.h"
 #include "net/RealRefSync.h"
+#include "net/TargetReachabilityProbe.h"
 #include "net/TcpConnect.h"
 #include "ui/CameraConfigDialog.h"
 #include "ui/CameraSettingsDialog.h"
@@ -400,6 +402,23 @@ void MainWindow::applyState(PlaybackState state) {
 }
 
 void MainWindow::startStreaming() {
+    // REQUIREMENT: refuse to start at all under the same condition
+    // maybeWarnAboutQcxVersion()'s callback actively stops an
+    // already-Playing session for -- see qcxVersionMismatch_'s own
+    // comment. Checked here, not just there, so a Play pressed AFTER the
+    // probe already completed (the common case; this races only if Play
+    // is pressed before Configure's own probe has finished) is blocked
+    // outright instead of starting and getting immediately torn down.
+    if (injectOnly_ && qcxVersionMismatch_) {
+        showGeneralStatus(
+            tr("Cannot start: %1's real QCX driver reports an API version mismatch, and "
+               "--inject-only means there's no local display preview to fall back on. "
+               "Uncheck --inject-only, or upgrade the software to match this board's driver. "
+               "See qcarcam-injector docs/adr/0002.")
+                .arg(currentTarget_),
+            /*isError=*/true);
+        return;
+    }
     if (state_ == PlaybackState::Idle) {
         for (auto* widget : cameraWidgets_) {
             widget->resetIdle();
@@ -472,12 +491,118 @@ void MainWindow::startStreaming() {
     // reintroduces is strictly preferable to a hardware hang that needs a
     // power cycle to clear.
     for (auto* widget : cameraWidgets_) {
-        widget->showStatus(tr("Confirming target injection…"));
+        widget->showStatus(tr("Searching for target…"));
     }
 
     dispatcherStartAttempted_ = false; // fresh retry budget for this Play press
+    beginReachabilityCheck();
+}
+
+void MainWindow::beginReachabilityCheck() {
+    reachabilityCheckActive_ = true;
+    const int token = ++reachabilityCheckToken_;
+    setControlsBusyForReachabilityCheck(true);
+    // Explicit clearGeneralStatus() first -- a fresh Play press is
+    // "starting something new" (same convention Install Injector/Stop
+    // already follow, see showGeneralStatus()'s own comment), so a stale
+    // error left over from an earlier attempt must not silently suppress
+    // this routine message via showGeneralStatus()'s sticky-error guard.
+    clearGeneralStatus();
+    showGeneralStatus(tr("Searching for target %1…").arg(currentTarget_));
+
+    if (!reachabilityTimeoutTimer_) {
+        reachabilityTimeoutTimer_ = new QTimer(this);
+        reachabilityTimeoutTimer_->setSingleShot(true);
+        connect(reachabilityTimeoutTimer_, &QTimer::timeout, this, [this]() {
+            // reachabilityCheckActive_ (not the timer's own firing) is
+            // what decides whether there's still anything to time out --
+            // the only way this lambda runs for a check that's already
+            // been decided (the probe itself already answered) is a
+            // queued timeout event landing just after that.
+            if (!reachabilityCheckActive_) {
+                return;
+            }
+            autoStopOnUnreachable(
+                tr("%1 did not respond to ping within %2s -- check the target IP address.")
+                    .arg(currentTarget_)
+                    .arg(kReachabilityTimeoutMs / 1000));
+        });
+    }
+    reachabilityTimeoutTimer_->start(kReachabilityTimeoutMs);
+
+    camsyringe::TargetReachabilityProbe::checkAsync(
+        currentTarget_.toStdString(), [this, token](bool reachable) {
+            QMetaObject::invokeMethod(
+                this, [this, token, reachable]() { onReachabilityCheckResult(reachable, token); },
+                Qt::QueuedConnection);
+        });
+}
+
+void MainWindow::onReachabilityCheckResult(bool reachable, int token) {
+    if (token != reachabilityCheckToken_ || !reachabilityCheckActive_) {
+        return; // stale -- this check was already decided (timed out/cancelled) or superseded
+    }
+    reachabilityCheckActive_ = false;
+    reachabilityTimeoutTimer_->stop();
+    setControlsBusyForReachabilityCheck(false);
+
+    if (!reachable) {
+        autoStopOnUnreachable(
+            tr("%1 does not respond to ping -- check the target IP address.").arg(currentTarget_));
+        return;
+    }
+
+    clearGeneralStatus();
+    for (auto* widget : cameraWidgets_) {
+        widget->showStatus(tr("Confirming target injection…"));
+    }
     declareToTarget();
     checkInjectorVersion();
+}
+
+void MainWindow::cancelReachabilityCheck() {
+    if (!reachabilityCheckActive_) {
+        return; // already decided (or never started) -- nothing to tear down
+    }
+    reachabilityCheckActive_ = false;
+    ++reachabilityCheckToken_; // the probe's own eventual callback is now stale, see its comment
+    reachabilityTimeoutTimer_->stop();
+    setControlsBusyForReachabilityCheck(false);
+}
+
+void MainWindow::autoStopOnUnreachable(const QString& message) {
+    // A real, full Stop -- not just "give up on the target and keep
+    // streaming locally" (see onDeclareComplete()'s connectFailed branch
+    // for that DIFFERENT, more lenient behavior, which is still correct
+    // for ITS scenario: a target confirmed reachable at Play time that
+    // then drops the actual declaration). This pre-flight gate answers a
+    // narrower, earlier question -- "is this even the right IP at all" --
+    // and user-specified: getting that wrong should tear the whole
+    // session down automatically, the same as pressing Stop by hand,
+    // rather than leaving local streaming running against a target that
+    // was never there to begin with.
+    onStopTriggered();
+    // onStopTriggered() -> stopEverything() -> cancelReachabilityCheck()
+    // already ran (a real no-op here, this check is already inactive by
+    // the time either caller reaches this point) and onStopTriggered()'s
+    // own clearGeneralStatus() just wiped the status bar -- re-assert
+    // `message` after, so the reason for this auto-stop is what's left
+    // showing, not a blank bar.
+    showGeneralStatus(message, /*isError=*/true);
+}
+
+void MainWindow::setControlsBusyForReachabilityCheck(bool busy) {
+    if (busy) {
+        playPauseAction_->setEnabled(false);
+        stopAction_->setEnabled(false);
+        camSyringeSettingsAction_->setEnabled(false);
+        installInjectorAction_->setEnabled(false);
+        cameraSettingsAction_->setEnabled(false);
+        return;
+    }
+    applyState(state_); // restores playPauseAction_/stopAction_/camSyringeSettingsAction_
+    installInjectorAction_->setEnabled(!currentTarget_.isEmpty());
+    cameraSettingsAction_->setEnabled(!currentTarget_.isEmpty());
 }
 
 void MainWindow::declareToTarget() {
@@ -567,11 +692,25 @@ void MainWindow::resolveCameraGeometry() {
                 this,
                 [this, target, results = std::move(results)]() {
                     QStringList summary;
+                    // Set true the moment any camera's failure carries a
+                    // SPECIFIC known reason (currently: the QCX API
+                    // version mismatch, see ResolvedCameraGeometry::
+                    // failureReason's own comment) -- selects showing the
+                    // status as a warning/error instead of the routine,
+                    // unstyled "Camera resolution: ..." info message,
+                    // since this is actionable, not just "still working
+                    // on it."
+                    bool anyKnownFailureReason = false;
                     geometryReadTimestamps_[target] = QDateTime::currentDateTime();
                     for (const auto& r : results) {
                         geometryCache_[target][r.camId] = r;
                         if (!r.ok) {
-                            summary << tr("cam %1: unknown").arg(r.camId);
+                            if (r.failureReason.isEmpty()) {
+                                summary << tr("cam %1: unknown").arg(r.camId);
+                            } else {
+                                summary << tr("cam %1: unknown (%2)").arg(r.camId).arg(r.failureReason);
+                                anyKnownFailureReason = true;
+                            }
                             continue;
                         }
                         summary << (r.wasFallback ? tr("cam %1: %2x%3 (fallback)")
@@ -598,7 +737,8 @@ void MainWindow::resolveCameraGeometry() {
                     }
                     if (target == currentTarget_ && !summary.isEmpty()) {
                         showGeneralStatus(
-                            tr("Camera resolution: %1").arg(summary.join(QStringLiteral("; "))));
+                            tr("Camera resolution: %1").arg(summary.join(QStringLiteral("; "))),
+                            /*isError=*/anyKnownFailureReason);
                     }
                     camsyringe::CameraConfigStore::save(geometryCache_, geometryReadTimestamps_);
                 },
@@ -612,28 +752,30 @@ void MainWindow::tryStartDispatcherThenRetry() {
     QString sshUser = sshUser_;
     QString sshKeyPath = sshKeyPath_;
     std::thread([this, target, controlPort, sshUser, sshKeyPath]() {
-        auto credentialsCb = [this, sshUser](const QString& t, QString* username, QString* password) {
-            bool accepted = false;
-            QMetaObject::invokeMethod(
-                this,
-                [this, t, sshUser, username, password, &accepted]() {
-                    ui::SshCredentialsDialog dlg(t, sshUser, this);
-                    if (dlg.exec() == QDialog::Accepted) {
-                        *username = dlg.username();
-                        *password = dlg.password();
-                        accepted = true;
-                    }
-                },
-                Qt::BlockingQueuedConnection);
-            return accepted;
-        };
+        // Same convention as QcxVersionProbe/CameraGeometryResolver's own
+        // declineCredentials -- this runs automatically after a failed
+        // Play (not from a deliberate user click on "start dispatcher"),
+        // so it must never itself prompt for credentials. Confirmed live
+        // this session as a real, reported bad experience: against a
+        // wrong-but-pingable IP (e.g. a real router at 192.168.1.1),
+        // ensureAuth()'s passwordless probe fails for a reason that has
+        // NOTHING to do with credentials, and this used to pop a
+        // SshCredentialsDialog that made it look like a password problem
+        // when the actual issue is just the wrong target. Declining here
+        // makes ensureAuth() return false immediately, and the "Best-
+        // effort either way" comment below already handles that
+        // correctly -- falls straight through to the ordinary
+        // "control-channel unreachable" error banner via
+        // onDeclareComplete()'s second connectFailed, same as if SSH
+        // itself were entirely unavailable.
+        auto declineCredentials = [](const QString&, QString*, QString*) { return false; };
 
         // Best-effort either way -- if SSH itself fails (unreachable
         // target, wrong credentials, no SSH at all), just retry anyway;
         // onDeclareComplete()'s second connectFailed (dispatcherStartAttempted_
         // now true) falls through to the ordinary error banner, same as
         // if this whole retry never existed.
-        if (sshSession_.ensureAuth(target, sshUser, sshKeyPath, credentialsCb)) {
+        if (sshSession_.ensureAuth(target, sshUser, sshKeyPath, declineCredentials)) {
             QString error;
             camsyringe::DispatcherRemoteControl::ensureRunning(sshSession_, target, controlPort,
                                                                 &error);
@@ -742,6 +884,14 @@ void MainWindow::onDeclareComplete(std::vector<CameraDeclareOutcome> outcomes,
 }
 
 void MainWindow::stopEverything(bool disconnectFromTarget) {
+    // A reachability check in flight (see beginReachabilityCheck()) is
+    // exactly as much "this session" as declareToTarget()/pool_ itself --
+    // Stop and Pause both need to be able to end one immediately, with no
+    // extra prompt: there is nothing left to confirm once the user has
+    // ALREADY pressed the button that ends the session. cancelReachabilityCheck()
+    // is already a no-op if no check is active, so this is safe
+    // unconditionally on every call, not just while searching.
+    cancelReachabilityCheck();
     pool_->stopAll();
     if (disconnectFromTarget) {
         dispatcherClient_.disconnect(); // the target-side teardown signal
@@ -779,24 +929,20 @@ void MainWindow::killTargetProcesses() {
     QString sshUser = sshUser_;
     QString sshKeyPath = sshKeyPath_;
     std::thread([this, target, sshUser, sshKeyPath]() {
-        auto credentialsCb = [this, sshUser](const QString& t, QString* username, QString* password) {
-            bool accepted = false;
-            QMetaObject::invokeMethod(
-                this,
-                [this, t, sshUser, username, password, &accepted]() {
-                    ui::SshCredentialsDialog dlg(t, sshUser, this);
-                    if (dlg.exec() == QDialog::Accepted) {
-                        *username = dlg.username();
-                        *password = dlg.password();
-                        accepted = true;
-                    }
-                },
-                Qt::BlockingQueuedConnection);
-            return accepted;
-        };
-
-        if (!sshSession_.ensureAuth(target, sshUser, sshKeyPath, credentialsCb)) {
-            return; // user cancelled the credentials prompt -- nothing more to do
+        // declineCredentials, NOT a real prompt -- this fires automatically
+        // off every Stop press (onStopTriggered()), not a deliberate "log
+        // into the target" action, same convention as
+        // tryStartDispatcherThenRetry()/resolveCameraGeometry()/
+        // refreshShimStatus()/etc. Confirmed live as a real bug: against a
+        // wrong/unreachable target this used to pop an unrequested
+        // SshCredentialsDialog (Qt::BlockingQueuedConnection back to the
+        // GUI thread) that the user had no reason to expect from pressing
+        // Stop -- easily missed/mistaken for the whole window having
+        // frozen. Declining here makes ensureAuth() fail fast instead, and
+        // the early return right below already handles that the same way
+        // a real cancel does: best-effort, nothing more to do.
+        if (!sshSession_.ensureAuth(target, sshUser, sshKeyPath, declineCredentials)) {
+            return; // passwordless SSH failed (or target unreachable) -- nothing more to do
         }
         QString error;
         if (!camsyringe::DispatcherRemoteControl::stopAll(sshSession_, target, &error)) {
@@ -844,6 +990,11 @@ void MainWindow::onConfigureTriggered() {
     applyShimState(ShimState::Blind);
     refreshShimStatus();
     maybeWarnAboutIpv6(currentTarget_);
+    // Reset BEFORE the fresh probe for this (possibly new) target even
+    // starts -- see qcxVersionMismatch_'s own comment for why a stale
+    // true from a previous target must never survive to block Play here.
+    qcxVersionMismatch_ = false;
+    maybeWarnAboutQcxVersion(currentTarget_);
     blfPath_ = dialog.blfPath();
     blfInterface_ = dialog.blfInterface();
     QStringList files = dialog.videoFiles();
@@ -943,6 +1094,10 @@ void MainWindow::onInstallInjectorTriggered() {
     }
 
     QString version = camsyringe::InjectorBundleFinder::extractVersion(bundlePath);
+    // Explicit clear before this deliberate action's own first status
+    // message -- see showGeneralStatus()'s own comment: a stale error
+    // from an earlier automatic check must not silently suppress this.
+    clearGeneralStatus();
     showGeneralStatus(tr("Preparing injector install on %1…").arg(currentTarget_));
     runInjectorInstall(bundlePath, version);
 }
@@ -1110,6 +1265,22 @@ void MainWindow::closeEvent(QCloseEvent* event) {
 }
 
 void MainWindow::showGeneralStatus(const QString& message, bool isError) {
+    // A routine (isError=false) update must never silently clobber a
+    // currently-displayed warning/error -- confirmed live this session:
+    // maybeWarnAboutQcxVersion()'s warning fired correctly, then
+    // resolveCameraGeometry()'s own routine "Camera resolution: ..."
+    // summary (an independent, separately-timed background SSH call)
+    // finished moments later and silently overwrote it, leaving the
+    // status bar looking clean while a real, known problem was present
+    // -- exactly the "UI hides a real issue" failure mode this project
+    // has been trying to eliminate. Callers that genuinely need to
+    // override a stale error when starting something new (Install
+    // Injector, Stop) must call clearGeneralStatus() first, explicitly
+    // -- it bypasses this guard on purpose, see its own comment.
+    if (!isError && generalStatusIsError_ && !message.isEmpty()) {
+        return;
+    }
+    generalStatusIsError_ = isError && !message.isEmpty();
     generalStatusLabel_->setText(message);
     // No border here (deliberately) -- QStatusBar's own baked-in item
     // inset (see the constructor's own long comment on this) means a
@@ -1121,7 +1292,15 @@ void MainWindow::showGeneralStatus(const QString& message, bool isError) {
     generalStatusLabel_->setStyleSheet(isError ? "color: red;" : QString());
 }
 
-void MainWindow::clearGeneralStatus() { showGeneralStatus(QString(), /*isError=*/false); }
+void MainWindow::clearGeneralStatus() {
+    // Bypasses showGeneralStatus()'s own sticky-error guard directly
+    // (not routed back through it) -- an explicit clear must always
+    // work, never itself get silently ignored because an error happened
+    // to be showing.
+    generalStatusIsError_ = false;
+    generalStatusLabel_->setText(QString());
+    generalStatusLabel_->setStyleSheet(QString());
+}
 
 bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
     if (watched == shimStatusLabel_ && event->type() == QEvent::MouseButtonDblClick) {
@@ -1248,6 +1427,67 @@ void MainWindow::maybeWarnAboutIpv6(const QString& target) {
                                "will likely fail to start. Consider an IPv4 target (Configure's "
                                "\"Force IPv4\") until the board is fixed.")
                                 .arg(target),
+                            /*isError=*/true);
+                    }
+                },
+                Qt::QueuedConnection);
+        });
+}
+
+void MainWindow::maybeWarnAboutQcxVersion(const QString& target) {
+    camsyringe::QcxVersionProbe::checkAsync(
+        sshSession_, target, sshUser_, sshKeyPath_,
+        [this, target](camsyringe::QcxVersionProbe::Result result) {
+            QMetaObject::invokeMethod(
+                this,
+                [this, target, result]() {
+                    if (currentTarget_ != target) {
+                        return; // stale -- user has since changed the target again
+                    }
+                    if (!result.ok) {
+                        return; // inconclusive -- never warn/act on a non-result
+                    }
+                    qcxVersionMismatch_ = result.versionMismatch;
+                    if (!result.versionMismatch) {
+                        return;
+                    }
+                    QString versionNote = result.builtVersion.isEmpty()
+                                               ? QString()
+                                               : tr(" (this build supports QCX API version %1)")
+                                                     .arg(result.builtVersion);
+                    // REQUIREMENT, not just informational: with
+                    // injectOnly_ checked, there is no local Screen/EGL
+                    // preview render as an independent reason to keep
+                    // going (see qcxVersionMismatch_'s own comment and
+                    // qcarcam-injector's docs/adr/0002's recorded
+                    // blocking policy) -- if a session is already
+                    // Playing/Paused when this result arrives, stop it
+                    // now, the same way the Stop menu action does.
+                    // startStreaming() itself checks qcxVersionMismatch_
+                    // too, so a FUTURE Play attempt is blocked outright
+                    // rather than allowed to start and immediately get
+                    // torn down again.
+                    if (injectOnly_ &&
+                        (state_ == PlaybackState::Playing || state_ == PlaybackState::Paused)) {
+                        onStopTriggered();
+                        showGeneralStatus(
+                            tr("Stopped: %1's real QCX driver reports an API version "
+                               "mismatch%2, and --inject-only means there's no local display "
+                               "preview to fall back on. Uncheck --inject-only, or upgrade the "
+                               "software to match this board's driver. See qcarcam-injector "
+                               "docs/adr/0002.")
+                                .arg(target, versionNote),
+                            /*isError=*/true);
+                    } else {
+                        showGeneralStatus(
+                            tr("Warning: %1's real QCX driver reports an API version mismatch%2 "
+                               "-- real-camera diagnostics (camtest, live resolution discovery) "
+                               "won't work until the software is upgraded to match this board's "
+                               "driver. %3 See qcarcam-injector docs/adr/0002.")
+                                .arg(target, versionNote,
+                                     injectOnly_
+                                         ? tr("Play is blocked while --inject-only is checked.")
+                                         : tr("Injected/replayed video is unaffected.")),
                             /*isError=*/true);
                     }
                 },

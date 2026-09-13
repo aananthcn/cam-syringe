@@ -64,9 +64,20 @@
 #     (the full closure), <install-dir>/plugins/platforms/libqxcb.so, and
 #     <install-dir>/run-camsyringe.sh (default install-dir
 #     $HOME/camsyringe -- no root needed, unlike the QNX bundle's /aos).
-#   - ADDITIVE, same convention as qcarcam-injector's bundle -- never
-#     rm -rf's <install-dir>, just creates bin/lib/plugins if missing and
-#     extracts on top.
+#   - Removes any previous bin/lib/plugins under <install-dir> before
+#     extracting -- confirmed live as a real, hard-to-diagnose bug: this
+#     used to be additive (same convention as qcarcam-injector's bundle --
+#     never rm -rf's <install-dir>, just creates bin/lib/plugins if
+#     missing and extracts on top), which let a stale file from an OLDER
+#     install survive a reinstall of a NEWER bundle (`tar x` overwrites a
+#     path that's present in BOTH the old and new archive, but never
+#     deletes one that's simply absent from the new one) -- a tester
+#     re-running this exact installer kept reproducing an already-fixed
+#     bug until a manual `rm -rf <install-dir>` first. Safe to wipe:
+#     bin/lib/plugins are entirely this bundle's own content -- nothing
+#     user-authored ever lives there (run-camsyringe.sh and
+#     .install-source, the only other files under <install-dir>, are
+#     themselves fully rewritten by every install too).
 #   - run-camsyringe.sh is the entry point testers actually use: sets
 #     LD_LIBRARY_PATH to the bundled lib/ (camsyringe's own embedded
 #     RUNPATH points at this BUILD MACHINE's absolute build directory --
@@ -370,9 +381,12 @@ INSTALL_DIR="\${CAMSYRINGE_INSTALL_DIR:-${INSTALL_DIR_DEFAULT}}"
 echo "camsyringe bundle installer (v${BUNDLE_VERSION})"
 echo "Install directory: \$INSTALL_DIR"
 
-# Additive install, same convention as qcarcam-injector's bundle -- never
-# rm -rf's \$INSTALL_DIR itself, just ensures bin/lib/plugins exist and
-# extracts on top of whatever's already there.
+# Wipe any previous install's bin/lib/plugins before extracting -- see
+# this script's own header comment for the real, confirmed bug a plain
+# additive install (tar x over old content, never deleting what the new
+# archive doesn't have) caused. Nothing user-authored ever lives under
+# these three -- entirely this bundle's own content, safe to remove.
+rm -rf "\$INSTALL_DIR/bin" "\$INSTALL_DIR/lib" "\$INSTALL_DIR/plugins"
 mkdir -p "\$INSTALL_DIR/bin" "\$INSTALL_DIR/lib" "\$INSTALL_DIR/plugins"
 
 # Record where this .bin was actually run from -- CamSyringe's own

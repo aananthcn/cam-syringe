@@ -4,6 +4,7 @@
 #include <QString>
 #include <QTemporaryDir>
 
+#include <chrono>
 #include <functional>
 #include <map>
 #include <mutex>
@@ -91,6 +92,23 @@ private:
         QString keyPath; // empty: no explicit key, use default identity/agent
         QProcessEnvironment env;
     };
+
+    // Confirmed live: an unreachable target left the whole UI feeling
+    // "stuck" for 20-30s after a single Configure apply -- not a deadlock,
+    // just several independent features (refreshShimStatus(),
+    // resolveCameraGeometry(), and anything future) each separately
+    // calling ensureAuth() for the SAME target, and each one redundantly
+    // repaying the full ~8s passwordless SSH probe timeout because a
+    // FAILED probe was never cached, only a successful one was. Once one
+    // caller has proven this target's passwordless probe just failed,
+    // every other caller in the same burst should be able to skip
+    // straight past it instead of re-timing-out independently. Keyed by
+    // target, value is when this suppression expires -- short-lived
+    // (kPasswordlessProbeFailureTtlMs) so a target that genuinely comes
+    // back is retried again soon, not held back like a real per-target
+    // credentials cache would be.
+    static constexpr int kPasswordlessProbeFailureTtlMs = 15000;
+    std::map<QString, std::chrono::steady_clock::time_point> passwordlessProbeFailedUntil_;
 
     std::mutex mutex_;
     std::map<QString, Auth> authByTarget_;

@@ -96,7 +96,15 @@ public:
     // Safe to call again after stopAll() for a fresh session.
     size_t startAll();
 
-    // Asks every running camera to stop and joins all threads. Safe to
+    // Asks every running camera to stop. Does NOT block waiting for them
+    // to actually finish -- see stopAll()'s own comment for the real,
+    // confirmed GUI freeze a synchronous join() here caused (a camera
+    // thread can be stuck inside ffmpeg's own blocking write to an
+    // unreachable RTP destination, with no bound of its own). Each
+    // thread (and the CameraStream it's still running) is handed off to
+    // its own detached cleanup thread instead; startAll() can safely be
+    // called again immediately after this returns regardless -- it
+    // always constructs a fresh CameraStream per camera anyway. Safe to
     // call repeatedly, from the destructor, or with nothing running.
     void stopAll();
 

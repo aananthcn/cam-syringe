@@ -12,9 +12,37 @@
 
 namespace camsyringe {
 
+namespace {
+void shutdownSocket(std::atomic<int>& socketFd) {
+    int fd = socketFd.exchange(-1);
+    if (fd >= 0) {
+        ::shutdown(fd, SHUT_RDWR);
+        ::close(fd);
+    }
+}
+}  // namespace
+
 DispatcherClient::DispatcherClient() = default;
 
-DispatcherClient::~DispatcherClient() { disconnect(); }
+DispatcherClient::~DispatcherClient() {
+    // Deliberately NOT a plain disconnect() call, and MUST join()
+    // synchronously here, unlike disconnect() itself -- this object is
+    // about to be destroyed, and threadFunc() runs as a member function
+    // bound to `this` (declareAsync()'s std::thread constructor call).
+    // disconnect()'s own non-blocking hand-off is safe mid-session
+    // because the object lives on and a late callback is already
+    // tolerated (see its own comment) -- neither holds here, where a
+    // still-running detached thread would end up dereferencing a
+    // dangling `this` the moment this destructor returned and the
+    // object's memory was freed. A real use-after-free, not just a
+    // theoretical one -- caught specifically while fixing disconnect()'s
+    // own GUI-freeze bug below, so this needed calling out explicitly
+    // rather than just inheriting disconnect()'s new behavior blindly.
+    shutdownSocket(socketFd_);
+    if (thread_.joinable()) {
+        thread_.join();
+    }
+}
 
 void DispatcherClient::declareAsync(std::string target, int controlPort,
                                      std::vector<CameraDeclaration> cameras, bool injectOnly,
@@ -30,20 +58,29 @@ void DispatcherClient::declareAsync(std::string target, int controlPort,
 }
 
 void DispatcherClient::disconnect() {
-    int fd = socketFd_.exchange(-1);
-    if (fd >= 0) {
-        // shutdown() from this (GUI) thread unblocks whatever blocking
-        // socket call threadFunc() is currently in (connect/select, or a
-        // recv() inside readLine()) on the background thread -- the
-        // standard, if imperfect, technique for cancelling a blocking
-        // socket op from another thread. Acceptable here given this
-        // class only ever has ONE declaration/connection in flight at a
-        // time (a single desktop GUI app, not a high-concurrency server).
-        ::shutdown(fd, SHUT_RDWR);
-        ::close(fd);
-    }
+    // shutdown() from this (GUI) thread unblocks whatever blocking
+    // socket call threadFunc() is currently in (a recv() inside
+    // readLine(), most commonly -- the fd is only ever stored here once
+    // connectWithTimeout() has ALREADY succeeded, see socketFd_'s own
+    // comment) -- the standard, if imperfect, technique for cancelling a
+    // blocking socket op from another thread. Acceptable here given this
+    // class only ever has ONE declaration/connection in flight at a time
+    // (a single desktop GUI app, not a high-concurrency server).
+    shutdownSocket(socketFd_);
+    // NEVER thread_.join() HERE -- see this function's own header
+    // comment (DispatcherClient.h) for the real bug this caused: if
+    // threadFunc() is still inside connectWithTimeout() itself (target
+    // unreachable, fd not stored yet, so the shutdown() above had
+    // nothing to act on), a synchronous join() on the CALLING thread
+    // blocks for as long as that connect attempt takes -- and
+    // MainWindow::onStopTriggered() calls disconnect() directly on the
+    // GUI thread, so this froze the entire window. Hand the thread off
+    // to its own detached cleanup thread instead; thread_ itself is left
+    // non-joinable immediately (via the move), so declareAsync() can
+    // safely start a new one right after this returns, same contract as
+    // before.
     if (thread_.joinable()) {
-        thread_.join();
+        std::thread([t = std::move(thread_)]() mutable { t.join(); }).detach();
     }
 }
 

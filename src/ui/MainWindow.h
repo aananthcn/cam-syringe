@@ -146,7 +146,80 @@ private:
 
     void rebuildGrid();
     void applyState(PlaybackState state); // updates state_ + all actions' text/enabled
-    void startStreaming();                // Idle/Paused -> Playing (starts pool_ AND declares, see above)
+    // Idle/Paused -> Playing: starts pool_ (local streaming) unconditionally
+    // and immediately, same as always -- see class comment for why that
+    // can never wait on the target. The target-communication half
+    // (declareToTarget()/checkInjectorVersion()) is gated behind
+    // beginReachabilityCheck() instead of running immediately -- see its
+    // own comment.
+    void startStreaming();
+    // Hard, dedicated pre-flight gate in front of declareToTarget()/
+    // checkInjectorVersion() (called from startStreaming(), and nowhere
+    // else) -- NOT in front of pool_->startAll(), which already ran by the
+    // time this is called. Fires a TargetReachabilityProbe (a ping, see
+    // its own class comment for why NOT a control-port connect) and
+    // starts reachabilityTimeoutTimer_ (kReachabilityTimeoutMs) as a
+    // belt-and-suspenders UI-facing cutoff for it; shows a "searching"
+    // status-bar message for the whole window (see showGeneralStatus()).
+    // Whichever comes first -- the probe's own result
+    // (onReachabilityCheckResult()) or the timer elapsing (calls
+    // autoStopOnUnreachable() directly) -- decides the outcome; the other
+    // is then stale and ignored (see reachabilityCheckToken_'s own
+    // comment).
+    void beginReachabilityCheck();
+    // GUI thread only -- invoked (via QMetaObject::invokeMethod from
+    // TargetReachabilityProbe's background thread) once that probe
+    // resolves. Discards a stale result (see reachabilityCheckToken_'s own
+    // comment) rather than acting on it. reachable==false hands off to
+    // autoStopOnUnreachable() and returns without ever calling
+    // declareToTarget()/checkInjectorVersion().
+    void onReachabilityCheckResult(bool reachable, int token);
+    // Disables (busy=true) or restores (busy=false) every menu action this
+    // window has, for the duration of a reachability check -- called from
+    // beginReachabilityCheck()/onReachabilityCheckResult()/
+    // cancelReachabilityCheck() so nothing is clickable while the search
+    // is in flight. Replaces an earlier approach (an app-wide event
+    // filter intercepting clicks and popping a "do you want me to stop?"
+    // confirmation) that caused two confirmed, reproducible GUI hangs
+    // this session -- disabling the controls outright removes the
+    // trigger for both instead of working around it. busy=false restores
+    // playPauseAction_/stopAction_/camSyringeSettingsAction_ via
+    // applyState(state_) (their normal, PlaybackState-driven formula) and
+    // installInjectorAction_/cameraSettingsAction_ via their own
+    // independent !currentTarget_.isEmpty() formula (same one
+    // onConfigureTriggered() uses) -- NOT a plain "re-enable everything",
+    // since either action set legitimately stays disabled in some states.
+    void setControlsBusyForReachabilityCheck(bool busy);
+    // Silently ends an in-flight reachability check -- called only from
+    // stopEverything() (a no-op if no check is active, so safe
+    // unconditionally on every Stop/Pause/window-close). Reaching this
+    // WHILE a check is still active only happens via autoStopOnUnreachable()'s
+    // own onStopTriggered() call (user-facing Play/Pause/Stop are all
+    // disabled for the check's duration, see setControlsBusyForReachabilityCheck())
+    // or a window close mid-search; either way there is no status message
+    // to show here -- autoStopOnUnreachable() shows its own, and a window
+    // close shows nothing at all. Bumps reachabilityCheckToken_ so the
+    // probe's own eventual callback (still running in the background --
+    // there is no live handle to cancel it with, same limitation
+    // TargetSsh's SSH-based probes already have) is recognized as stale
+    // and ignored when it does arrive.
+    void cancelReachabilityCheck();
+    // Runs a full Stop (onStopTriggered() -- local streaming, target
+    // connection, and target-side processes all torn down) when the
+    // reachability check concludes that the target isn't there at all,
+    // then re-shows `message` as a status-bar error (onStopTriggered()'s
+    // own clearGeneralStatus() would otherwise silently wipe it). Called
+    // from onReachabilityCheckResult() (the probe itself says
+    // unreachable) and the 2s timeout timer (neither answer arrived in
+    // time) -- user-specified: getting the target address wrong at Play
+    // time should tear the session down automatically, the same as
+    // pressing Stop by hand, rather than leaving local streaming running
+    // against a target that was never there. Deliberately NOT the same
+    // policy onDeclareComplete()'s connectFailed branch uses (streams
+    // locally regardless) -- that branch is for a target confirmed
+    // reachable at Play time whose actual declaration then fails, a
+    // materially different, later situation.
+    void autoStopOnUnreachable(const QString& message);
     // Playing/Paused -> Idle (or Playing -> Paused, see disconnectFromTarget):
     // always stops pool_ + BLF replay locally. disconnectFromTarget=true
     // (Stop, window close) additionally closes the control connection --
@@ -256,6 +329,23 @@ private:
     // against currentTarget_ when the result comes back), never shown
     // against the wrong target.
     void maybeWarnAboutIpv6(const QString& target);
+    // Same convention as maybeWarnAboutIpv6() just above -- best-effort,
+    // passwordless-only, fire-and-forget proactive check, this time for
+    // the board's real QCX driver reporting an API version incompatible
+    // with this build (net/QcxVersionProbe.h, qcarcam-injector's docs/
+    // adr/0002-qcx-client-api-version-must-match-board.md). Runs
+    // regardless of the target's family (unlike the IPv6 check, this
+    // isn't IPv6-specific) and regardless of whether any configured
+    // camera's resolution flow happens to touch the real driver at all
+    // -- deliberately NOT folded into resolveCameraGeometry()'s own
+    // per-camera "unknown" reporting, which can legitimately stay silent
+    // even when this mismatch exists (a camera with a static XML
+    // resolution never needs the live query that would hit it).
+    // Warns, does not block Play -- confirmed live that this mismatch
+    // does not affect the actual injection pipeline (the shim's own
+    // QCarCamInitialize() ignores apiVersion for every caller); see the
+    // ADR for the full reasoning and when blocking WOULD be correct.
+    void maybeWarnAboutQcxVersion(const QString& target);
     // Double-click handler for shimStatusLabel_ (see eventFilter()) --
     // a no-op while shimState_ is Blind (nothing confirmed to toggle
     // relative to -- explicit requirement, not an oversight). Otherwise
@@ -306,6 +396,20 @@ private:
     // convention as CameraConfigDialog::blfPath().
     QString blfPath_;
     QString blfInterface_;
+    // Last known result of maybeWarnAboutQcxVersion()'s probe for
+    // currentTarget_ -- reset to false at the START of every Configure
+    // apply (before the fresh async probe for the new target even
+    // starts), so a stale true from a PREVIOUS target can never block
+    // Play against a new one before its own probe has had a chance to
+    // run. Explicit REQUIREMENT (not just a warning): with injectOnly_
+    // true, this blocks startStreaming() outright, and actively stops an
+    // already-Playing/Paused session the moment the probe confirms it --
+    // see qcarcam-injector's docs/adr/0002-qcx-client-api-version-must-
+    // match-board.md's recorded blocking policy for why this is
+    // conditioned on injectOnly_ specifically (with it unchecked, the
+    // target's own local Screen/EGL preview render is a still-valid,
+    // independent reason to keep going).
+    bool qcxVersionMismatch_ = false;
     PlaybackState state_ = PlaybackState::Idle;
     camsyringe::DispatcherClient dispatcherClient_;
     // Owned here (not local to a function) so auth resolved once -- for
@@ -317,6 +421,32 @@ private:
     // Reset at the start of every startStreaming() call (see there) --
     // caps tryStartDispatcherThenRetry() at one attempt per Play press.
     bool dispatcherStartAttempted_ = false;
+    // Hard UI-facing budget for beginReachabilityCheck()'s probe --
+    // user-specified: a genuinely correct target answers well under a
+    // second, so 2s is generous for "is this even the right IP" while
+    // still being fast enough that a wrong one is never mistaken for a
+    // hang. Deliberately much shorter than DispatcherClient's own 8s
+    // connect timeout or TargetSsh's per-call SSH timeouts (5-45s) --
+    // those stay as-is for the (already-confirmed-reachable) target
+    // they're bounding.
+    static constexpr int kReachabilityTimeoutMs = 2000;
+    // True only between beginReachabilityCheck() starting and its outcome
+    // being decided (onReachabilityCheckResult() or
+    // cancelReachabilityCheck()) -- i.e. exactly the window in which
+    // declareToTarget()/checkInjectorVersion() have NOT yet been allowed
+    // to run for this Play press.
+    bool reachabilityCheckActive_ = false;
+    // Bumped by every beginReachabilityCheck() (a fresh check starting)
+    // and cancelReachabilityCheck() (an in-flight one ending early) --
+    // lets onReachabilityCheckResult() and the timeout timer's own
+    // callback recognize a result/timeout belonging to a check that is no
+    // longer the current one (superseded by a newer Play press, or
+    // already resolved/cancelled) and discard it, rather than a second
+    // bool that could itself race against reachabilityCheckActive_. Same
+    // "stale callback" idiom as currentTarget_ comparisons elsewhere in
+    // this file.
+    int reachabilityCheckToken_ = 0;
+    QTimer* reachabilityTimeoutTimer_ = nullptr;
     // Per-target, per-camera-id cache of resolveCameraGeometry()'s own
     // results -- "once per target" (its own comment): kept for the
     // app's lifetime, keyed by target address, so re-applying Configure
@@ -366,6 +496,10 @@ private:
     // touch this label's text/style. Deliberately draws NO border of its
     // own -- see showGeneralStatus()'s own comment for why.
     QLabel* generalStatusLabel_ = nullptr;
+    // Tracks whether generalStatusLabel_ currently shows an error/warning
+    // -- see showGeneralStatus()'s own comment for why a routine update
+    // checks this before overwriting.
+    bool generalStatusIsError_ = false;
     // Fixed-width box, parented to statusBar() DIRECTLY (not to
     // generalStatusLabel_) so its coordinates are in the bar's own
     // inset-free space -- eventFilter() watches statusBar()'s own
