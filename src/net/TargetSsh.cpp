@@ -2,6 +2,7 @@
 
 #include "net/PingProbe.h"
 
+#include <QDebug>
 #include <QFile>
 #include <QFileDevice>
 #include <QProcess>
@@ -122,7 +123,11 @@ QString TargetSsh::ensureAskpassScript() {
     if (!askpassScriptReady_) {
         QString path = askpassDir_.filePath("askpass.sh");
         QFile script(path);
-        script.open(QIODevice::WriteOnly | QIODevice::Text);
+        if (!script.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            qWarning("TargetSsh: failed to write askpass script at %s: %s",
+                     qUtf8Printable(path), qUtf8Printable(script.errorString()));
+            return path; // askpassScriptReady_ stays false -- retry next call
+        }
         script.write("#!/bin/sh\necho \"$CAMSYRINGE_SSH_ASKPASS_PASSWORD\"\n");
         script.close();
         script.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner |

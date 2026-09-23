@@ -76,8 +76,8 @@ private slots:
     void onBrowseClicked(int row);
     void onSshKeyBrowseClicked();
     void onBlfBrowseClicked();
-    void onBlfEnabledChanged(int state);
-    void onForceIpv4Changed(int state);
+    void onBlfEnabledChanged(Qt::CheckState state);
+    void onForceIpv4Changed(Qt::CheckState state);
     void onAccept();
 
 private:
