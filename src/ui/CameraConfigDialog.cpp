@@ -121,7 +121,7 @@ CameraConfigDialog::CameraConfigDialog(const QString& initialTarget, int initial
     // is kDefaultTargetIPv4 for now.
     forceIpv4Check_ = new QCheckBox(tr("Force IPv4"), this);
     forceIpv4Check_->setChecked(!initialTarget.contains(':'));
-    connect(forceIpv4Check_, &QCheckBox::stateChanged, this,
+    connect(forceIpv4Check_, &QCheckBox::checkStateChanged, this,
             &CameraConfigDialog::onForceIpv4Changed);
     form->addRow(QString(), forceIpv4Check_);
 
@@ -208,7 +208,7 @@ CameraConfigDialog::CameraConfigDialog(const QString& initialTarget, int initial
     blfEnabledCheck_ = new QCheckBox(tr("Replay BLF Ethernet capture"), this);
     blfEnabledCheck_->setChecked(!initialBlfPath.isEmpty());
     rootLayout->addWidget(blfEnabledCheck_);
-    connect(blfEnabledCheck_, &QCheckBox::stateChanged, this,
+    connect(blfEnabledCheck_, &QCheckBox::checkStateChanged, this,
             &CameraConfigDialog::onBlfEnabledChanged);
 
     blfRowContainer_ = new QWidget(this);
@@ -324,11 +324,11 @@ void CameraConfigDialog::onBlfBrowseClicked() {
     }
 }
 
-void CameraConfigDialog::onBlfEnabledChanged(int) {
+void CameraConfigDialog::onBlfEnabledChanged(Qt::CheckState) {
     blfRowContainer_->setVisible(blfEnabledCheck_->isChecked());
 }
 
-void CameraConfigDialog::onForceIpv4Changed(int) {
+void CameraConfigDialog::onForceIpv4Changed(Qt::CheckState) {
     targetEdit_->setText(forceIpv4Check_->isChecked() ? camsyringe::kDefaultTargetIPv4
                                                         : camsyringe::kDefaultTargetIPv6);
 }
