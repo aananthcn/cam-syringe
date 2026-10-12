@@ -47,7 +47,7 @@ void InjectorBundleInstaller::installAsync(TargetSsh& ssh, QString target, int c
         progress(5, "Removing previous install on " + target + "...");
 
         // Remove the previous install -- only these three subdirs, never
-        // /var/opt itself (see create-qcarcam-inj-bundle.sh's own header
+        // /var/opt itself (see create-qcarcam-inj-bundle.py's own header
         // comment for why /var/opt is the shared install root and why
         // its own installer only ever touches these three).
         TargetSsh::Result rm = ssh.run(target, "rm -rf /var/opt/bin /var/opt/lib /var/opt/include", 15000);
@@ -66,7 +66,7 @@ void InjectorBundleInstaller::installAsync(TargetSsh& ssh, QString target, int c
 
         progress(70, "Installing " + bundleName + " on " + target + "...");
         // Install -- the bundle is already self-installing/additive, see
-        // create-qcarcam-inj-bundle.sh; this class only handles the
+        // create-qcarcam-inj-bundle.py; this class only handles the
         // removal step above that installer deliberately never does.
         TargetSsh::Result install =
             ssh.run(target, QString("chmod +x /tmp/%1 && /tmp/%1").arg(bundleName), 60000);

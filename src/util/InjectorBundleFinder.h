@@ -9,7 +9,7 @@ namespace camsyringe {
 
 // Locates the qcarcam_injector_bundle_vX.Y.bin this PC has available to
 // push to a target (see release/create-windows-bundle.sh and
-// ~/labs/qnx/qnx_toolkit/release/create-qcarcam-inj-bundle.sh, which
+// ~/labs/qnx/qnx_toolkit/release/create-qcarcam-inj-bundle.py, which
 // builds it) -- NOT a source-tree sibling of this repo (it's built by a
 // different, unrelated project), but meant to travel as a sibling of
 // wherever the CAMSYRINGE bundle itself ends up (see release/README.md's

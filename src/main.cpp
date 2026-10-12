@@ -3,8 +3,11 @@
 #include "net/TargetDefaults.h"
 #include "net/TcpConnect.h"
 #include "ui/MainWindow.h"
+#include "util/LaunchConfig.h"
+#include "util/SessionConfigStore.h"
 
 #include <QApplication>
+#include <QCoreApplication>
 
 #include <cstdio>
 #include <cstdlib>
@@ -38,7 +41,7 @@ constexpr const char* kDefaultTarget = camsyringe::kDefaultTargetIPv4;
 constexpr const char* kDefaultSshUser = "root";
 constexpr int kDefaultControlPort = 5000;
 constexpr int kMinCamId = 1;
-constexpr int kMaxCamId = 16; // this target's allcamtest range, see qcarcam-injector/ARCHITECTURE.md
+constexpr int kMaxCamId = 16; // this target's allcamtest range, see qcarcam-injector/docs/adr/README.md (former ARCHITECTURE.md item map)
 constexpr const char* kDefaultBlfInterface = "enp6s0";
 
 void printUsage(const char* prog) {
@@ -60,9 +63,10 @@ void printUsage(const char* prog) {
         "                     order -- REQUIRED if any video files are given. A dash within\n"
         "                     one entry expands to an inclusive range (e.g. 1-3,8 means\n"
         "                     1,2,3,8). Each id must be 1-%d and unique.\n"
-        "  --inject-only      Target-side: skip the local Screen/EGL preview render on the\n"
-        "                     target entirely -- pure injection into qcxserver (see\n"
-        "                     qcarcam_dispatcher's own --inject-only flag). On by default;\n"
+        "  --inject-only      Inject only (no display on target): the target starts no\n"
+        "                     display services and renders no local preview -- pure\n"
+        "                     injection into qcxserver (see qcarcam_dispatcher's own\n"
+        "                     --inject-only flag, and docs/adr/0007). On by default;\n"
         "                     uncheck it in Settings > CamSyringe to disable\n"
         "  --blf-file PATH    Vector BLF file to replay (Ethernet-frame objects only, see\n"
         "                     src/blf/BlfLoader.h) as raw AF_PACKET frames, original timing,\n"
@@ -141,6 +145,14 @@ int main(int argc, char** argv) {
     std::string camIdsArg;
     bool playAll = false;
     bool injectOnly = true;
+    // Which of these the COMMAND LINE actually gave -- a given option overrides
+    // the remembered Camera Injection configuration for this launch
+    // (docs/adr/0013); one that wasn't given falls back to it, then to the default.
+    bool controlPortGiven = false;
+    bool injectOnlyGiven = false;
+    bool sshKeyGiven = false;
+    bool blfFileGiven = false;
+    bool blfInterfaceGiven = false;
     std::string sshKeyPath;
     std::string blfFile;
     std::string blfInterface = kDefaultBlfInterface;
@@ -162,6 +174,7 @@ int main(int argc, char** argv) {
                 return EXIT_FAILURE;
             }
             controlPort = std::atoi(argv[++i]);
+            controlPortGiven = true;
         } else if (arg == "--cam-ids") {
             if (i + 1 >= argc) {
                 printUsage(argv[0]);
@@ -172,24 +185,28 @@ int main(int argc, char** argv) {
             playAll = true;
         } else if (arg == "--inject-only") {
             injectOnly = true;
+            injectOnlyGiven = true;
         } else if (arg == "--ssh-key") {
             if (i + 1 >= argc) {
                 printUsage(argv[0]);
                 return EXIT_FAILURE;
             }
             sshKeyPath = argv[++i];
+            sshKeyGiven = true;
         } else if (arg == "--blf-file") {
             if (i + 1 >= argc) {
                 printUsage(argv[0]);
                 return EXIT_FAILURE;
             }
             blfFile = argv[++i];
+            blfFileGiven = true;
         } else if (arg == "--blf-interface") {
             if (i + 1 >= argc) {
                 printUsage(argv[0]);
                 return EXIT_FAILURE;
             }
             blfInterface = argv[++i];
+            blfInterfaceGiven = true;
         } else if (arg.rfind("--", 0) == 0) {
             std::fprintf(stderr, "unknown option: %s\n", arg.c_str());
             printUsage(argv[0]);
@@ -203,14 +220,44 @@ int main(int argc, char** argv) {
         }
     }
 
-    if (playAll && videoFiles.empty()) {
+    // The application object comes first: it fixes the application name and directory the remembered
+    // configuration is looked up by. Reading the saved file before it exists silently found nothing, and
+    // the dialog opened empty (docs/adr/0013).
+    QApplication app(argc, argv);
+    QCoreApplication::setApplicationName(QStringLiteral("camsyringe"));
+
+    // Remembered Camera Injection configuration (docs/adr/0013): the command line wins for every option it
+    // gave, then the saved file, then the built-in defaults (camsyringe::mergeLaunchConfig, which has its own
+    // tests). Saved cameras are used only when the command line gave no video files and no ids.
+    camsyringe::LaunchInput cli;
+    cli.target = targetArg;
+    cli.controlPort = controlPort;
+    cli.controlPortGiven = controlPortGiven;
+    cli.injectOnlyGiven = injectOnlyGiven;
+    cli.sshKey = sshKeyPath;
+    cli.sshKeyGiven = sshKeyGiven;
+    cli.blfFile = blfFile;
+    cli.blfFileGiven = blfFileGiven;
+    cli.blfInterface = blfInterface;
+    cli.blfInterfaceGiven = blfInterfaceGiven;
+    cli.videoFiles = videoFiles;
+    cli.camIdsGiven = !camIdsArg.empty();
+    camsyringe::LaunchDefaults defaults;
+    defaults.target = kDefaultTarget;
+    defaults.sshUser = kDefaultSshUser;
+    defaults.controlPort = kDefaultControlPort;
+    defaults.blfInterface = kDefaultBlfInterface;
+    const camsyringe::SessionConfig saved = camsyringe::SessionConfigStore::load();
+    const camsyringe::LaunchConfig launch = camsyringe::mergeLaunchConfig(cli, saved, defaults);
+
+    if (playAll && launch.videoFiles.empty()) {
         std::fprintf(stderr, "--playall requires at least one video file\n");
         printUsage(argv[0]);
         return EXIT_FAILURE;
     }
 
-    std::vector<int> camIds;
-    if (!videoFiles.empty()) {
+    std::vector<int> camIds = launch.camIds;
+    if (!launch.videoFiles.empty() && !launch.camerasFromSaved) {
         if (camIdsArg.empty()) {
             std::fprintf(stderr, "--cam-ids is required when video files are given\n");
             printUsage(argv[0]);
@@ -221,46 +268,21 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "%s\n", error.c_str());
             return EXIT_FAILURE;
         }
-        if (camIds.size() != videoFiles.size()) {
+        if (camIds.size() != launch.videoFiles.size()) {
             std::fprintf(stderr, "--cam-ids gave %zu id(s) but %zu video file(s) were given\n",
-                          camIds.size(), videoFiles.size());
+                          camIds.size(), launch.videoFiles.size());
             return EXIT_FAILURE;
         }
     }
 
-    std::string target = targetArg.empty() ? kDefaultTarget : targetArg;
-    std::string sshUser = kDefaultSshUser;
-    // `--target user@host` -- the "user@" part used to be silently
-    // discarded here (parsed by usage text, never actually used anywhere)
-    // until Configure gained its own SSH User field; now both feed the
-    // same MainWindow::sshUser_, so this CLI form and Configure agree.
-    auto at = target.find('@');
-    if (at != std::string::npos) {
-        sshUser = target.substr(0, at);
-        target = target.substr(at + 1);
-    }
-
-    QApplication app(argc, argv);
-
     camsyringe::StreamPool pool;
-    for (size_t i = 0; i < videoFiles.size(); ++i) {
-        int port = camsyringe::kBasePort + static_cast<int>(i) * camsyringe::kPortStep;
-        camsyringe::CameraConfig cfg;
-        cfg.inputPath = videoFiles[i];
-        cfg.destUrl =
-            "rtp://" + camsyringe::bracketHostIfIPv6(target) + ":" + std::to_string(port);
-        cfg.label = "cam" + std::to_string(i);
-        cfg.index = static_cast<int>(i);
-        cfg.camId = camIds[i];
-        cfg.port = port;
-        pool.addCamera(std::move(cfg));
-    }
+    camsyringe::populatePool(pool, launch, camIds);
 
-    camsyringe::ui::MainWindow window(&pool, QString::fromStdString(target), controlPort,
-                                       QString::fromStdString(sshUser),
-                                       QString::fromStdString(sshKeyPath), injectOnly,
-                                       QString::fromStdString(blfFile),
-                                       QString::fromStdString(blfInterface), playAll);
+    camsyringe::ui::MainWindow window(&pool, QString::fromStdString(launch.target), launch.controlPort,
+                                       QString::fromStdString(launch.sshUser),
+                                       QString::fromStdString(launch.sshKeyPath), launch.injectOnly,
+                                       QString::fromStdString(launch.blfFile),
+                                       QString::fromStdString(launch.blfInterface), playAll);
     window.resize(1280, 720);
     window.show();
 

@@ -70,8 +70,7 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/third_party/vector_blf/src)
 include_directories(${CMAKE_CURRENT_BINARY_DIR}/third_party/vector_blf/src)
 add_subdirectory(third_party/vector_blf)
 
-add_executable(camsyringe
-    src/main.cpp
+set(CAMSYRINGE_SOURCES
     src/blf/BlfLoader.cpp
     src/blf/BlfReplayer.cpp
     src/camera/CameraStream.cpp
@@ -95,9 +94,24 @@ add_executable(camsyringe
     src/ui/CameraSettingsDialog.cpp
     src/ui/SshCredentialsDialog.cpp
     src/util/CameraConfigStore.cpp
+    src/util/ConfigFiles.cpp
     src/util/InjectorBundleFinder.cpp
+    src/util/InjectorManifest.cpp
+    src/util/LaunchConfig.cpp
+    src/util/SessionConfigStore.cpp
 )
+
+
+add_executable(camsyringe src/main.cpp ${CAMSYRINGE_SOURCES})
 
 target_include_directories(camsyringe PRIVATE src)
 target_link_libraries(camsyringe PRIVATE PkgConfig::FFMPEG Qt6::Widgets Threads::Threads Vector_BLF)
 target_compile_definitions(camsyringe PRIVATE CAMSYRINGE_VERSION="${CAMSYRINGE_VERSION}")
+
+# Headless GUI test (opt-in, not built by default): drives the real MainWindow and Camera Injection dialog
+# from a saved configuration. Build and run:
+#   cmake --build build --target camsyringe_gui_test && QT_QPA_PLATFORM=offscreen build/camsyringe_gui_test
+add_executable(camsyringe_gui_test EXCLUDE_FROM_ALL tests/gui_dialog_test.cpp ${CAMSYRINGE_SOURCES})
+target_include_directories(camsyringe_gui_test PRIVATE src)
+target_link_libraries(camsyringe_gui_test PRIVATE PkgConfig::FFMPEG Qt6::Widgets Threads::Threads Vector_BLF)
+target_compile_definitions(camsyringe_gui_test PRIVATE CAMSYRINGE_VERSION="${CAMSYRINGE_VERSION}")

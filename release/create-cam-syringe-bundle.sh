@@ -9,7 +9,7 @@
 # .bin installer, for a team member's Linux PC to install and run with
 # ZERO extra steps -- no `apt install`, no C++ build toolchain, nothing
 # beyond the one file. Same self-extracting-.bin technique
-# qcarcam-injector's own release/create-qcarcam-inj-bundle.sh uses (header
+# qcarcam-injector's own release/create-qcarcam-inj-bundle.py uses (header
 # script + embedded tar payload after an __ARCHIVE_BELOW__ marker), for a
 # consistent experience across both this project's and that one's release
 # process.

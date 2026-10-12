@@ -104,7 +104,7 @@ cp "$WINDOWS_DIR/install-camsyringe.cmd" "$STAGE/"
 cp "$WINDOWS_DIR/setup-camsyringe-wsl.ps1" "$STAGE/"
 
 # Optional: the qcarcam-injector bundle (built separately, see
-# ~/labs/qnx/qnx_toolkit/release/create-qcarcam-inj-bundle.sh), if a copy
+# ~/labs/qnx/qnx_toolkit/release/create-qcarcam-inj-bundle.py), if a copy
 # has been placed in this same artifacts/ dir alongside the Linux
 # camsyringe bundle. Not required -- CamSyringe's own "Install Injector"
 # menu action falls back to a file picker (and remembers wherever the

@@ -15,7 +15,10 @@
 #include "ui/CameraWidget.h"
 #include "ui/SshCredentialsDialog.h"
 #include "util/CameraConfigStore.h"
+#include "util/SessionConfigStore.h"
 #include "util/InjectorBundleFinder.h"
+#include "util/InjectorManifest.h"
+#include "net/DispatcherProtocol.h"
 
 #include <QAction>
 #include <QCloseEvent>
@@ -57,11 +60,16 @@ QString portFromDestUrl(const std::string& destUrl) {
     return QString::fromStdString(destUrl.substr(pos + 1));
 }
 
-// See qcarcam-injector/ARCHITECTURE.md item 37 for the target-side
+// See qcarcam-injector/docs/adr/README.md (former ARCHITECTURE.md item map) item 37 for the target-side
 // contract these constants/helpers encode.
 constexpr const char* kRealLibPath = "/mnt/lib64/camera/libqcxclient.so";
 constexpr const char* kRealLibBackupPath = "/mnt/lib64/camera/libqcxclient.so.real";
-// Where the ONE injector bundle (create-qcarcam-inj-bundle.sh) already
+// Scratch name for building a symlink next to kRealLibPath, then renamed
+// over it -- rename(2) is atomic, ln -sf (unlink + symlink) is not.
+constexpr const char* kRealLibNewLinkPath = "/mnt/lib64/camera/libqcxclient.so.new";
+// Target of kRealLibPath's symlink in the REAL state: relative, same dir.
+constexpr const char* kRealLibBackupName = "libqcxclient.so.real";
+// Where the ONE injector bundle (create-qcarcam-inj-bundle.py) already
 // installs the shim on the target, alongside the real binaries --
 // InjectorBundleInstaller's existing /var/opt convention (see its own
 // "rm -rf /var/opt/bin /var/opt/lib /var/opt/include" comment). The
@@ -409,6 +417,13 @@ void MainWindow::applyState(PlaybackState state) {
             playPauseAction_->setEnabled(pool_->cameraCount() > 0);
             stopAction_->setEnabled(false);
             camSyringeSettingsAction_->setEnabled(true);
+            if (geometryRelearnPending_) {
+                // Only at Idle (not Paused): a paused session still holds its
+                // control connection and the target's inputs, and the relearn's
+                // live query must not overlap them. See invalidateCameraGeometry().
+                geometryRelearnPending_ = false;
+                QTimer::singleShot(0, this, &MainWindow::resolveCameraGeometry);
+            }
             break;
         case PlaybackState::Playing:
             playPauseAction_->setText(tr("⏸ Pause"));
@@ -440,6 +455,34 @@ void MainWindow::startStreaming() {
                "Uncheck --inject-only, or upgrade the software to match this board's driver. "
                "See qcarcam-injector docs/adr/0002.")
                 .arg(currentTarget_),
+            /*isError=*/true);
+        return;
+    }
+    // REQUIREMENT (docs/adr/0012): injection runs only while the target is in
+    // SHIM mode. In REAL mode the real camera feed must reach the system
+    // through qcxserver, so Play is blocked here and nothing is declared to
+    // the target. Only a CONFIRMED REAL blocks: BLIND (unknown) is let
+    // through, and qcarcam_dispatcher refuses by itself if the target turns
+    // out to be REAL.
+    if (shimState_ == ShimState::Real) {
+        showGeneralStatus(
+            tr("Cannot start: %1 is in REAL mode (the real camera feed through qcxserver), "
+               "and injection is only allowed in SHIM mode. Double-click the SHIM/REAL box "
+               "(bottom right) to switch the target to SHIM, then press Play.")
+                .arg(currentTarget_),
+            /*isError=*/true);
+        return;
+    }
+    // REQUIREMENT (docs/adr/0014): refuse to Play against a dispatcher that
+    // speaks a different control protocol -- the declaration and its replies
+    // can't be trusted to mean the same thing on both ends.
+    if (dispatcherProtocolMismatch_) {
+        showGeneralStatus(
+            tr("Cannot start: %1's qcarcam_dispatcher speaks a different control protocol than "
+               "this CamSyringe (protocol %2). Use ⇪ Install Injector to install the matching "
+               "bundle, or update CamSyringe.")
+                .arg(currentTarget_)
+                .arg(camsyringe::kDispatcherProtocolVersion),
             /*isError=*/true);
         return;
     }
@@ -588,6 +631,7 @@ void MainWindow::onReachabilityCheckResult(bool reachable, int token) {
     }
     declareToTarget();
     checkInjectorVersion();
+    verifyInjectorInstall();
 }
 
 void MainWindow::cancelReachabilityCheck() {
@@ -665,14 +709,34 @@ void MainWindow::declareToTarget() {
 
 void MainWindow::checkInjectorVersion() {
     camsyringe::DispatcherVersionProbe::queryAsync(
-        currentTarget_.toStdString(), controlPort_, [this](bool ok, std::string version) {
+        currentTarget_.toStdString(), controlPort_,
+        [this](bool ok, std::string version, int protocol) {
             if (!ok || version.empty()) {
                 return; // unknown (old dispatcher, unreachable) -- nothing to compare, no notice
             }
             QString qVersion = QString::fromStdString(version);
             QMetaObject::invokeMethod(
                 this,
-                [this, qVersion]() {
+                [this, qVersion, protocol]() {
+                    // protocol 0 = the dispatcher didn't report one (it predates
+                    // protocol versioning): unknown, not a mismatch. The install
+                    // check (verifyInjectorInstall) is what flags a stale install.
+                    dispatcherProtocolMismatch_ =
+                        protocol > 0 && protocol != camsyringe::kDispatcherProtocolVersion;
+                    if (dispatcherProtocolMismatch_) {
+                        if (state_ == PlaybackState::Playing || state_ == PlaybackState::Paused) {
+                            onStopTriggered();
+                        }
+                        showGeneralStatus(
+                            tr("%1's qcarcam_dispatcher speaks control protocol %2, but this "
+                               "CamSyringe speaks %3 -- Play is blocked. Use ⇪ Install Injector "
+                               "to install the matching bundle, or update CamSyringe.")
+                                .arg(currentTarget_)
+                                .arg(protocol)
+                                .arg(camsyringe::kDispatcherProtocolVersion),
+                            /*isError=*/true);
+                        return;
+                    }
                     auto localBundle = camsyringe::InjectorBundleFinder::findBundle();
                     if (!localBundle) {
                         return; // nothing known locally to compare against
@@ -691,6 +755,60 @@ void MainWindow::checkInjectorVersion() {
         });
 }
 
+void MainWindow::verifyInjectorInstall() {
+    if (currentTarget_.isEmpty()) {
+        return;
+    }
+    const auto localBundle = camsyringe::InjectorBundleFinder::findBundle();
+    if (!localBundle) {
+        return; // nothing known locally to compare against
+    }
+    const camsyringe::InjectorManifest manifest = camsyringe::InjectorManifestReader::read(*localBundle);
+    if (!manifest.valid) {
+        return; // an older bundle with no manifest -- nothing to check against
+    }
+
+    const QString target = currentTarget_;
+    const QString sshUser = sshUser_;
+    const QString sshKeyPath = sshKeyPath_;
+    std::thread([this, target, sshUser, sshKeyPath, manifest]() {
+        // Passwordless only, like every automatic probe: this runs on Play, not
+        // from a deliberate "talk to the target" click, so it must never pop a
+        // credentials dialog.
+        if (!sshSession_.ensureAuth(target, sshUser, sshKeyPath, declineCredentials)) {
+            return;
+        }
+        auto res = sshSession_.run(target, camsyringe::InjectorManifestReader::verifyCommand(manifest),
+                                   10000);
+        // No output at all means the install directory doesn't exist (cd failed), which
+        // compare() reports as every file missing -- i.e. "nothing is installed".
+        const camsyringe::InstallDiff diff = camsyringe::InjectorManifestReader::compare(manifest, res.stdOut);
+        if (diff.matches()) {
+            return;
+        }
+        QMetaObject::invokeMethod(
+            this,
+            [this, target, manifest, diff]() {
+                if (currentTarget_ != target) {
+                    return; // stale -- the target changed while this ran
+                }
+                QStringList parts;
+                if (!diff.differing.isEmpty()) {
+                    parts << tr("different: %1").arg(diff.differing.join(", "));
+                }
+                if (!diff.missing.isEmpty()) {
+                    parts << tr("missing: %1").arg(diff.missing.join(", "));
+                }
+                showGeneralStatus(
+                    tr("The injector installed on %1 is not the bundle this PC has (build %2) -- "
+                       "%3. Use ⇪ Install Injector.")
+                        .arg(target, manifest.buildId, parts.join(QStringLiteral("; "))),
+                    /*isError=*/true);
+            },
+            Qt::QueuedConnection);
+    }).detach();
+}
+
 void MainWindow::resolveCameraGeometry() {
     if (currentTarget_.isEmpty()) {
         return;
@@ -700,13 +818,22 @@ void MainWindow::resolveCameraGeometry() {
     std::vector<int> needed;
     for (size_t i = 0; i < pool_->cameraCount(); ++i) {
         int camId = pool_->configAt(i).camId;
-        if (!cached.contains(camId) &&
-            std::find(needed.begin(), needed.end(), camId) == needed.end()) {
+        // Needs learning if there is no entry at all, or the entry is a
+        // failed lookup -- docs/adr/0011 trigger 1. A failure that carries
+        // a SPECIFIC known reason (currently the QCX API version mismatch)
+        // is NOT retried: that can't change until the injector bundle or
+        // the board's driver does, so retrying would only repeat a slow
+        // live query for the same answer. Settings > Camera Configs still
+        // re-reads everything on demand.
+        auto entry = cached.constFind(camId);
+        const bool needsLearning =
+            entry == cached.constEnd() || (!entry->ok && entry->failureReason.isEmpty());
+        if (needsLearning && std::find(needed.begin(), needed.end(), camId) == needed.end()) {
             needed.push_back(camId);
         }
     }
     if (needed.empty()) {
-        return; // every configured id already resolved for this target
+        return; // every configured id already has a usable (or known-unfixable) entry
     }
     std::sort(needed.begin(), needed.end()); // ascending -- the fallback order, see
                                               // CameraGeometryResolver::resolveAsync()'s own comment
@@ -774,6 +901,42 @@ void MainWindow::resolveCameraGeometry() {
                 },
                 Qt::QueuedConnection);
         });
+}
+
+namespace {
+// How long after an error-triggered invalidation the SAME camera is not
+// invalidated again (docs/adr/0011). A camera the board rejects outright
+// (e.g. id 3 on the bench target) reports an error on every Play; without
+// this it would re-run the slow live query every time.
+constexpr int kGeometryRelearnCooldownSecs = 600;
+} // namespace
+
+bool MainWindow::invalidateCameraGeometry(int camId) {
+    if (currentTarget_.isEmpty()) {
+        return false;
+    }
+    const QDateTime now = QDateTime::currentDateTime();
+    QDateTime& last = geometryInvalidatedAt_[currentTarget_][camId];
+    if (last.isValid() && last.secsTo(now) < kGeometryRelearnCooldownSecs) {
+        return false;
+    }
+    last = now;
+
+    geometryCache_[currentTarget_].remove(camId);
+    camsyringe::CameraConfigStore::save(geometryCache_, geometryReadTimestamps_);
+    // The size now in the pool is the suspect one: clear it, so a Play before
+    // the relearn finishes uses the safe capped size instead of reusing it.
+    for (size_t i = 0; i < pool_->cameraCount(); ++i) {
+        if (pool_->configAt(i).camId == camId) {
+            pool_->setTargetGeometry(i, 0, 0);
+        }
+    }
+    geometryRelearnPending_ = true;
+    std::fprintf(stderr,
+                 "camsyringe: cam id %d's cached resolution for %s is suspect -- dropped; it will be "
+                 "re-learned from the target once the session is stopped\n",
+                 camId, currentTarget_.toUtf8().constData());
+    return true;
 }
 
 void MainWindow::tryStartDispatcherThenRetry() {
@@ -876,11 +1039,22 @@ void MainWindow::onDeclareComplete(std::vector<CameraDeclareOutcome> outcomes,
     for (size_t i = 0; i < outcomes.size() && i < pool_->cameraCount(); ++i) {
         const auto& outcome = outcomes[i];
         if (outcome.result == DeclareResult::Error) {
+            // docs/adr/0011 trigger 2: an error reported for this camera
+            // makes its cached resolution suspect (a wrong size is one
+            // way a target can reject a stream), so drop it and re-learn
+            // after Stop.
+            // A REAL-mode refusal says nothing about the camera's size, so it must
+            // not drop the cached resolution (docs/adr/0012).
+            const bool relearn =
+                outcome.errorReason.find("REAL mode") == std::string::npos &&
+                invalidateCameraGeometry(outcome.camId);
             cameraWidgets_[i]->showError(
                 tr("Target rejected cam id %1: %2 (still streaming locally, but the target isn't "
-                   "injecting it)")
+                   "injecting it)%3")
                     .arg(outcome.camId)
-                    .arg(QString::fromStdString(outcome.errorReason)));
+                    .arg(QString::fromStdString(outcome.errorReason))
+                    .arg(relearn ? tr(" -- its cached resolution will be re-learned after Stop")
+                                 : QString()));
             pool_->setEnabled(i, false);
         } else {
             cameraWidgets_[i]->clearError();
@@ -894,13 +1068,14 @@ void MainWindow::onDeclareComplete(std::vector<CameraDeclareOutcome> outcomes,
     // (real-hardware bug report: 3 of 4 quadrants rendered on the
     // target's physical panel, no error anywhere in CamSyringe) --
     // qcarcam_dispatcher now reports it explicitly (PREVIEW_ERROR,
-    // qcarcam-injector/ARCHITECTURE.md item 33), surfaced here via the
+    // qcarcam-injector/docs/adr/README.md (former ARCHITECTURE.md item map) item 33), surfaced here via the
     // status bar rather than a popup, matching this app's own "no modal
     // for a non-fatal target-side notice" convention.
     if (!previewIssues.empty()) {
         QStringList ids;
         for (const auto& issue : previewIssues) {
             ids << QString::number(issue.camId);
+            invalidateCameraGeometry(issue.camId); // docs/adr/0011 trigger 2
         }
         showGeneralStatus(
             tr("Target's local preview failed for cam id(s) %1 -- injection itself is fine, only "
@@ -1029,11 +1204,35 @@ void MainWindow::onConfigureTriggered() {
     // starts -- see qcxVersionMismatch_'s own comment for why a stale
     // true from a previous target must never survive to block Play here.
     qcxVersionMismatch_ = false;
+    dispatcherProtocolMismatch_ = false;
     maybeWarnAboutQcxVersion(currentTarget_);
     blfPath_ = dialog.blfPath();
     blfInterface_ = dialog.blfInterface();
     QStringList files = dialog.videoFiles();
     std::vector<int> camIds = dialog.camIds();
+
+    // Remember what was just accepted, so the next launch opens pre-filled
+    // (docs/adr/0013). Never includes a password or any typed credential.
+    {
+        camsyringe::SessionConfig toSave;
+        toSave.valid = true;
+        toSave.target = currentTarget_;
+        toSave.controlPort = controlPort_;
+        toSave.sshUser = sshUser_;
+        toSave.sshKeyPath = sshKeyPath_;
+        toSave.videoFiles = files;
+        toSave.camIds = camIds;
+        toSave.injectOnly = injectOnly_;
+        toSave.blfPath = blfPath_;
+        toSave.blfInterface = blfInterface_;
+        QStringList saveErrors;
+        if (!camsyringe::SessionConfigStore::save(toSave, nullptr, &saveErrors)) {
+            // Silent failure is what made "it doesn't remember" so hard to see: say so (docs/adr/0013).
+            showGeneralStatus(tr("Couldn't save this configuration, so it won't be remembered next time: %1")
+                                  .arg(saveErrors.join(QStringLiteral("; "))),
+                              /*isError=*/true);
+        }
+    }
 
     const QMap<int, camsyringe::ResolvedCameraGeometry>& cachedForTarget =
         geometryCache_[currentTarget_]; // creates an empty entry if new -- fine, lookups below just miss
@@ -1422,9 +1621,16 @@ void MainWindow::refreshShimStatus() {
         bool queryOk = false;
         QString queryOut;
         if (authed) {
+            // kRealLibPath is a symlink once toggled (SHIM iff it points at
+            // the shim). A regular file with a .real beside it is the
+            // pre-symlink layout (a copied shim) -- still SHIM; a regular
+            // file with no .real was never toggled -- REAL.
             auto res = sshSession_.run(
                 target,
-                QString("test -e %1 && echo SHIM || echo REAL").arg(kRealLibBackupPath),
+                QString("if [ -L %1 ]; then "
+                        "ls -l %1 | grep -q 'libqcxclient_shim\\.so$' && echo SHIM || echo REAL; "
+                        "elif [ -e %2 ]; then echo SHIM; else echo REAL; fi")
+                    .arg(kRealLibPath, kRealLibBackupPath),
                 5000);
             queryOk = res.ok();
             queryOut = res.stdOut.trimmed();
@@ -1595,26 +1801,37 @@ void MainWindow::toggleShimStatus() {
         } else if (toShim) {
             // No PC-side file/scp at all -- the shim travels ONLY as part
             // of the one injector bundle now (see
-            // qcarcam-injector/release/create-qcarcam-inj-bundle.sh),
+            // qcarcam-injector/release/create-qcarcam-inj-bundle.py),
             // landing at kShimOnTargetPath when that bundle is installed
             // (InjectorBundleInstaller, same /var/opt convention it
             // already uses). This toggle just copies it from there into
-            // place -- if it's missing, the fix is "install the bundle",
-            // not "find/build a loose file on this PC", so that's what
-            // the error says. Back up the real file ONLY if it hasn't
-            // been already -- never overwrite an existing backup with a
-            // second rename (would otherwise clobber the one true REAL
-            // copy if this ever ran twice in a row without a REAL toggle
-            // between). Then refresh the real-ref reference copy from
-            // whichever board file is genuine right now (net/RealRefSync.h)
-            // -- unconditional every toggle, unlike the backup rename,
-            // since this one has no "clobbering the one true copy" risk.
+            // place by symlink -- if it's missing, the fix is "install the
+            // bundle", not "find/build a loose file on this PC", so that's
+            // what the error says (and it also must be checked BEFORE
+            // switching, or the link would dangle and every client would
+            // lose libqcxclient.so). Build the new symlink under a scratch
+            // name first, so every step that can fail happens before the
+            // live name is touched. Move the real file to .real ONLY if
+            // it's still a regular file with no backup yet -- never
+            // overwrite an existing backup (the one true REAL copy), and
+            // skip when it's already a symlink. Then refresh the real-ref
+            // reference copy from whichever board file is genuine right
+            // now (net/RealRefSync.h) -- unconditional every toggle, no
+            // clobbering risk. Last, mv -f renames the scratch link over
+            // the live name atomically.
+            // chmod 555 on the shim itself, before anything on /mnt is
+            // touched: the real library is -r-xr-xr-x, and the bundle
+            // installs the shim 0644 (owned by the build machine's uid), so
+            // match the real file's mode. Idempotent, and a failure aborts
+            // the toggle with the live library still untouched.
             QString cmd = QString("%1; [ -e %2 ] || { echo %3; exit 1; }; "
-                                   "[ -e %4 ] || mv %5 %4; "
-                                   "%6; "
-                                   "cp %2 %5 && chmod 555 %5")
-                               .arg(kRemountRw, kShimOnTargetPath, kShimMissingMarker, kRealLibBackupPath,
-                                    kRealLibPath, camsyringe::realRefSyncCommand());
+                                   "chmod 555 %2 || exit 1; "
+                                   "rm -f %4 && ln -s %2 %4 || exit 1; "
+                                   "[ -L %5 ] || [ -e %6 ] || mv %5 %6 || exit 1; "
+                                   "%7 || exit 1; "
+                                   "mv -f %4 %5")
+                               .arg(kRemountRw, kShimOnTargetPath, kShimMissingMarker, kRealLibNewLinkPath,
+                                    kRealLibPath, kRealLibBackupPath, camsyringe::realRefSyncCommand());
             auto res = sshSession_.run(target, cmd, 15000);
             if (res.ok()) {
                 finalState = ShimState::Shim;
@@ -1626,10 +1843,14 @@ void MainWindow::toggleShimStatus() {
                 error = res.stdErr;
             }
         } else {
-            // SHIM -> REAL: one atomic rename, removes the shim file as a
-            // side effect -- see qcarcam-injector/ARCHITECTURE.md item 37.
-            QString cmd =
-                QString("%1; mv %2 %3").arg(kRemountRw, kRealLibBackupPath, kRealLibPath);
+            // SHIM -> REAL: repoint the symlink at the .real file, via a
+            // scratch link + atomic rename (also replaces a pre-symlink
+            // copied shim) -- see docs/adr/0006. Refuse if .real is gone,
+            // rather than leave a dangling link.
+            QString cmd = QString("%1; [ -e %2 ] || { echo '%2 missing' >&2; exit 1; }; "
+                                   "rm -f %3 && ln -s %4 %3 && mv -f %3 %5")
+                               .arg(kRemountRw, kRealLibBackupPath, kRealLibNewLinkPath, kRealLibBackupName,
+                                    kRealLibPath);
             auto res = sshSession_.run(target, cmd, 10000);
             if (res.ok()) {
                 finalState = ShimState::Real;

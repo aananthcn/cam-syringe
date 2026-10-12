@@ -28,7 +28,11 @@ public:
     // understand VERSION, unreachable target, or timeout) -- version is
     // then empty and this is NOT an error condition callers should
     // surface; it just means no comparison can be made.
-    using Callback = std::function<void(bool ok, std::string version)>;
+    // protocol is the dispatcher's control-protocol version (its
+    // `PROTOCOL <n>` line, sent right after `VERSION`), or 0 when the
+    // dispatcher didn't send one (it predates protocol versioning). 0 means
+    // "unknown", never "mismatched" -- see net/DispatcherProtocol.h.
+    using Callback = std::function<void(bool ok, std::string version, int protocol)>;
 
     static void queryAsync(std::string target, int controlPort, Callback callback);
 };

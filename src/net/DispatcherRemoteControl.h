@@ -16,7 +16,7 @@ class TargetSsh;
 //     binary needs a restart to actually take effect.
 //
 // Uses `pidin`, NOT `pgrep`/`pkill` -- see
-// qcarcam-injector/ARCHITECTURE.md's "Remote process management on the
+// qcarcam-injector/docs/adr/README.md (former ARCHITECTURE.md item map)'s "Remote process management on the
 // target" section: pgrep/pkill aren't confirmed present on this QNX
 // image, and QNX's own `slay -f <name>` is confirmed UNRELIABLE for this
 // project's processes specifically (leaves them running, causing a

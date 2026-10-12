@@ -11,7 +11,7 @@ class TargetSsh;
 // Pushes a qcarcam_injector_bundle_vX.Y.bin to a target over SCP/SSH,
 // removes the previous install first (the bundle's own installer is
 // deliberately additive -- see
-// ~/labs/qnx/qnx_toolkit/release/create-qcarcam-inj-bundle.sh's header
+// ~/labs/qnx/qnx_toolkit/release/create-qcarcam-inj-bundle.py's header
 // comment -- so this class does the removal itself), runs the new
 // bundle, then restarts qcarcam_dispatcher (via DispatcherRemoteControl)
 // so the new binary actually takes effect -- a teammate never needs to

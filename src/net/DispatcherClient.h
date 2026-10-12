@@ -26,7 +26,7 @@ struct CameraDeclareOutcome {
 // A best-effort, independent-of-READY/ERROR notice that the TARGET's own
 // local preview (qcarcam_viewer, its physical-panel quadrant for this
 // camera) failed -- see qcarcam_dispatcher's PREVIEW_ERROR protocol line
-// (qcarcam-injector/ARCHITECTURE.md item 33). camId is still genuinely
+// (qcarcam-injector/docs/adr/README.md (former ARCHITECTURE.md item map) item 33). camId is still genuinely
 // READY/injecting when this shows up; only its on-target preview
 // rendering is affected, never CamSyringe's own local streaming/preview.
 struct PreviewIssue {
@@ -35,7 +35,7 @@ struct PreviewIssue {
 };
 
 // Talks to qcarcam_dispatcher's control-channel protocol on the target
-// (see qcarcam-injector/ARCHITECTURE.md items 29/30 for the target-side
+// (see qcarcam-injector/docs/adr/README.md (former ARCHITECTURE.md item map) items 29/30 for the target-side
 // half of this): declares which QCarCam id each camera's RTP stream
 // should be injected into, waits for a READY/ERROR verdict per camera,
 // then HOLDS THE CONNECTION OPEN for the rest of the session -- closing

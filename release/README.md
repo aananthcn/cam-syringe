@@ -161,7 +161,7 @@ address, no brackets needed anywhere in the UI.
 
 CamSyringe's "Install Injector" menu action pushes a
 `qcarcam_injector_bundle_vX.Y.bin` (built separately, by
-`~/labs/qnx/qnx_toolkit/release/create-qcarcam-inj-bundle.sh` -- a
+`~/labs/qnx/qnx_toolkit/release/create-qcarcam-inj-bundle.py` -- a
 different, unrelated project/repo) to a target over SSH. It isn't
 required to be here -- CamSyringe falls back to a one-time file picker
 and remembers wherever you point it -- but dropping a copy into this
