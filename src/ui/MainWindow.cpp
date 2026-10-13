@@ -466,10 +466,8 @@ void MainWindow::startStreaming() {
     // out to be REAL.
     if (shimState_ == ShimState::Real) {
         showGeneralStatus(
-            tr("Cannot start: %1 is in REAL mode (the real camera feed through qcxserver), "
-               "and injection is only allowed in SHIM mode. Double-click the SHIM/REAL box "
-               "(bottom right) to switch the target to SHIM, then press Play.")
-                .arg(currentTarget_),
+            tr("Target is in REAL mode: double-click the REAL box (bottom right) to switch "
+               "to SHIM, then press Play."),
             /*isError=*/true);
         return;
     }
