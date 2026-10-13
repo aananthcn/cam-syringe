@@ -269,6 +269,23 @@ TargetSsh::Result TargetSsh::run(const QString& target, const QString& remoteCom
     return {r.exitCode, r.stdOut, r.stdErr};
 }
 
+bool TargetSsh::sshInvocation(const QString& target, const QString& remoteCommand,
+                               int connectTimeoutSecs, QStringList* args,
+                               QProcessEnvironment* env) {
+    Auth auth;
+    if (!lookupAuth(target, &auth)) {
+        return false;
+    }
+    // ssh keeps the FIRST value given for an option, so these come before
+    // commonSshOpts()'s own ConnectTimeout=8.
+    QStringList a = {"-o", "ConnectTimeout=" + QString::number(connectTimeoutSecs),
+                     "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=3"};
+    a << commonSshOpts() << keyOpts(auth.keyPath) << (auth.user + "@" + target) << remoteCommand;
+    *args = a;
+    *env = auth.env;
+    return true;
+}
+
 TargetSsh::Result TargetSsh::scp(const QString& localPath, const QString& target,
                                   const QString& remotePath, int timeoutMs) {
     Auth auth;

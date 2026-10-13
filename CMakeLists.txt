@@ -86,6 +86,8 @@ set(CAMSYRINGE_SOURCES
     src/net/RealRefSync.cpp
     src/net/TargetConnectivityMonitor.cpp
     src/net/TargetSsh.cpp
+    src/net/TargetStatsParser.cpp
+    src/net/TargetStatsStream.cpp
     src/net/TcpConnect.cpp
     src/orchestrator/Timeline.cpp
     src/ui/MainWindow.cpp

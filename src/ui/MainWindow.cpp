@@ -1056,6 +1056,7 @@ void MainWindow::onDeclareComplete(std::vector<CameraDeclareOutcome> outcomes,
             pool_->setEnabled(i, false);
         } else {
             cameraWidgets_[i]->clearError();
+            startTargetStats(outcome.camId);
         }
     }
 
@@ -1086,6 +1087,50 @@ void MainWindow::onDeclareComplete(std::vector<CameraDeclareOutcome> outcomes,
     }
 }
 
+namespace {
+constexpr int kTargetStatsReportMs = 5000;
+}
+
+// docs/adr/0017: print the target's own injection numbers on this terminal in
+// real time. Silent no-op when ssh auth isn't already resolved for the target.
+void MainWindow::startTargetStats(int camId) {
+    auto stream = std::make_unique<camsyringe::TargetStatsStream>(sshSession_, currentTarget_, camId);
+    if (stream->start()) {
+        targetStats_.push_back(std::move(stream));
+        if (!targetStatsReportTimer_) {
+            targetStatsReportTimer_ = new QTimer(this);
+            connect(targetStatsReportTimer_, &QTimer::timeout, this,
+                    &MainWindow::printTargetStatsReport);
+        }
+        if (!targetStatsReportTimer_->isActive()) {
+            targetStatsReportTimer_->start(kTargetStatsReportMs);
+        }
+    }
+}
+
+void MainWindow::printTargetStatsReport() {
+    std::vector<camsyringe::TargetStatsSnapshot> cams;
+    for (const auto& s : targetStats_) {
+        cams.push_back(s->snapshot());
+    }
+    if (cams.empty()) {
+        return;
+    }
+    std::fprintf(stderr, "%s", camsyringe::formatTargetStatsReport(cams, kTargetStatsReportMs / 1000.0)
+                                   .toUtf8()
+                                   .constData());
+}
+
+void MainWindow::stopTargetStats() {
+    if (targetStatsReportTimer_) {
+        targetStatsReportTimer_->stop();
+    }
+    for (auto& s : targetStats_) {
+        s->stop();
+    }
+    targetStats_.clear();
+}
+
 void MainWindow::stopEverything(bool disconnectFromTarget) {
     // A reachability check in flight (see beginReachabilityCheck()) is
     // exactly as much "this session" as declareToTarget()/pool_ itself --
@@ -1095,6 +1140,7 @@ void MainWindow::stopEverything(bool disconnectFromTarget) {
     // is already a no-op if no check is active, so this is safe
     // unconditionally on every call, not just while searching.
     cancelReachabilityCheck();
+    stopTargetStats();
     pool_->stopAll();
     if (disconnectFromTarget) {
         dispatcherClient_.disconnect(); // the target-side teardown signal

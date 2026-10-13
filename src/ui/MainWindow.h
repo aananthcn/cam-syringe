@@ -6,6 +6,7 @@
 #include <QMap>
 #include <QString>
 
+#include <memory>
 #include <thread>
 #include <vector>
 
@@ -14,6 +15,7 @@
 #include "net/DispatcherClient.h"
 #include "net/TargetConnectivityMonitor.h"
 #include "net/TargetSsh.h"
+#include "net/TargetStatsStream.h"
 
 class QGridLayout;
 class QAction;
@@ -441,6 +443,15 @@ private:
     bool dispatcherProtocolMismatch_ = false;
     PlaybackState state_ = PlaybackState::Idle;
     camsyringe::DispatcherClient dispatcherClient_;
+
+    // Live target-side statistics printed on the terminal (docs/adr/0017): one
+    // streaming ssh per READY camera, started in onDeclareComplete() and ended
+    // in stopEverything(). Informational only -- never affects the session.
+    std::vector<std::unique_ptr<camsyringe::TargetStatsStream>> targetStats_;
+    QTimer* targetStatsReportTimer_ = nullptr; // prints the periodic table (docs/adr/0017)
+    void printTargetStatsReport();
+    void startTargetStats(int camId);
+    void stopTargetStats();
     // Owned here (not local to a function) so auth resolved once -- for
     // the Play-time dispatcher-start retry OR an "Install Injector" run,
     // whichever happens first -- is reused by the other for the rest of

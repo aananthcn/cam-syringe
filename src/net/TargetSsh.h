@@ -73,6 +73,15 @@ public:
     Result scp(const QString& localPath, const QString& target, const QString& remotePath,
                int timeoutMs);
 
+    // The ssh command line + environment for a LONG-LIVED remote command that
+    // the caller runs itself (e.g. a QProcess streaming a log), instead of the
+    // blocking run(). Same auth, key and host-key options as run(); plus a short
+    // connect timeout and keep-alives so a vanished target ends the stream
+    // instead of hanging it. ensureAuth() must already have succeeded for
+    // `target` -- returns false (and fills nothing) otherwise. Never prompts.
+    bool sshInvocation(const QString& target, const QString& remoteCommand, int connectTimeoutSecs,
+                       QStringList* args, QProcessEnvironment* env);
+
     // The SSH username resolved for `target` (via ensureAuth()), if
     // already known this session -- empty otherwise. DISPLAY only (e.g.
     // showing exactly what "Install Injector" is about to connect as,
