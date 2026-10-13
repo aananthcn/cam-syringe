@@ -17,7 +17,7 @@ struct CameraConfig {
     std::string destUrl;
     std::string label;
     int index = 0;
-    // QCarCam id (1-16) this camera's stream should be injected into on
+    // QCarCam id (0-16) this camera's stream should be injected into on
     // the target, and the RTP port destUrl actually points at (kept as a
     // plain int alongside destUrl's own "rtp://host:port" string so
     // callers don't need to re-parse it) -- both travel with the rest of

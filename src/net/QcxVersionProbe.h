@@ -39,7 +39,7 @@ class TargetSsh;
 // it, not a blanket block).
 //
 // The probe itself: briefly runs /var/opt/bin/qcarcam_injector with a
-// scratch camera id (99, safely outside kMaxCamId's real 1-16 range) and
+// scratch camera id (99, safely outside kMaxCamId's real 0-16 range) and
 // a scratch ring name, over SSH, and reads the shim's own
 // "[shim] input probe: ... QCARCAM_RET_UNSUPPORTED ..." diagnostic lines
 // from its output (see QcxClientShim.cpp's probeRealInputs()) --

@@ -86,7 +86,7 @@ QString buildStartCommand(const QString& target) {
 // previewer, none of which die just because their parent did. `pidin`,
 // not pgrep/pkill (unconfirmed on this image) or `slay -f` (confirmed
 // unreliable for these processes) -- see
-// qcarcam-injector/ARCHITECTURE.md's "Remote process management on the
+// qcarcam-injector/docs/adr/README.md (former ARCHITECTURE.md item map)'s "Remote process management on the
 // target", mirroring qcarcam-injector/tests/deploy_and_run.sh's own
 // remote_kill_by_name().
 const char* kKillAllCommand =

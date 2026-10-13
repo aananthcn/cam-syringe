@@ -31,10 +31,7 @@ CamSyringe's default target (`kDefaultTarget`, `src/main.cpp`) is
 of the project's real standard bench address, `kDefaultTargetIPv6`
 (`fd53:7cb8:383:2::172`). `192.168.1.1` is the generic default IPv4
 address across this board family (see `qcarcam-injector`'s own
-`emac_iosock_network.sh`), deliberately NOT this specific bench's own
-live address (`192.168.1.4`, set by `/persist/net/early-net-iosock.sh`)
-— a code-level default should name the generic/documented address, not
-one bench's local override.
+`emac_iosock_network.sh`) and is also this bench's own live address.
 
 No separate IPv4/IPv6 *mode* setting drives this anywhere. Both
 `bracketHostIfIPv6()` (CamSyringe's own connect path) and

@@ -36,7 +36,7 @@ namespace camsyringe {
 // loops without needing to track the source's own timestamps across passes.
 //
 // IMPORTANT: qcarcam_receiver only tolerates one continuous stream per
-// receiver process run (see qcarcam-injector/ARCHITECTURE.md item 22) --
+// receiver process run (see qcarcam-injector/docs/adr/README.md (former ARCHITECTURE.md item map) item 22) --
 // a second, independent streaming session (even from a clean restart of
 // this sender) can wedge the target's hardware decoder at the OS driver
 // level, sometimes recoverable only by a full target power-cycle, not an

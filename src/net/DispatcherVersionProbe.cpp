@@ -2,6 +2,7 @@
 
 #include "net/TcpConnect.h"
 
+#include <cstdlib>
 #include <thread>
 
 #include <sys/socket.h>
@@ -17,7 +18,7 @@ void DispatcherVersionProbe::queryAsync(std::string target, int controlPort, Cal
         std::string err;
         int fd = connectWithTimeout(target, controlPort, 3, &err);
         if (fd < 0) {
-            callback(false, std::string());
+            callback(false, std::string(), 0);
             return;
         }
         // Bound the REPLY wait too, not just the connect -- confirmed for
@@ -39,16 +40,26 @@ void DispatcherVersionProbe::queryAsync(std::string target, int controlPort, Cal
         ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
         if (!sendAll(fd, "VERSION\n")) {
             ::close(fd);
-            callback(false, std::string());
+            callback(false, std::string(), 0);
             return;
         }
         std::string line;
         bool got = readLine(fd, line);
+        // Optional second line: `PROTOCOL <n>`. A dispatcher that predates it
+        // just closes after the first line, so this read fails fast (and is
+        // bounded by the same receive timeout) and the protocol stays 0.
+        int protocol = 0;
+        if (got && line.rfind("VERSION ", 0) == 0) {
+            std::string second;
+            if (readLine(fd, second) && second.rfind("PROTOCOL ", 0) == 0) {
+                protocol = std::atoi(second.c_str() + 9);
+            }
+        }
         ::close(fd);
         if (got && line.rfind("VERSION ", 0) == 0) {
-            callback(true, line.substr(8));
+            callback(true, line.substr(8), protocol);
         } else {
-            callback(false, std::string());
+            callback(false, std::string(), 0);
         }
     }).detach();
 }

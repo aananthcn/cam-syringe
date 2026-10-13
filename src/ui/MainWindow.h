@@ -46,14 +46,14 @@ class CameraWidget;
 // Play (from Idle, or after Stop) ALSO declares every configured camera
 // (its QCarCam id + RTP port) to the target's qcarcam_dispatcher over a
 // control-channel connection (DispatcherClient, see
-// qcarcam-injector/ARCHITECTURE.md items 29/30 for the target-side half
+// qcarcam-injector/docs/adr/README.md (former ARCHITECTURE.md item map) items 29/30 for the target-side half
 // of this) -- but streaming itself (StreamPool::startAll()) starts
 // FIRST, immediately, not gated on the target's response. This is
 // deliberate, not a shortcut: the target's own receiver can't report
 // readiness until it has actually received and probed real RTP data, so
 // gating startAll() on the declaration completing would deadlock both
 // sides waiting on each other (confirmed for real, the hard way, in this
-// feature's own first end-to-end test -- see git history/ARCHITECTURE.md).
+// feature's own first end-to-end test -- see git history).
 // The declaration therefore runs ASYNCHRONOUSLY alongside already-live
 // streaming; once it resolves, a camera id the target rejected (ERROR)
 // gets an error banner on its tile and StreamPool::setEnabled(i, false)
@@ -136,7 +136,7 @@ private slots:
 private:
     enum class PlaybackState { Idle, Playing, Paused };
     // Mirrors the target's own `/mnt/lib64/camera/libqcxclient.so` state --
-    // see qcarcam-injector/ARCHITECTURE.md item 37. Blind ("target not
+    // see qcarcam-injector/docs/adr/README.md (former ARCHITECTURE.md item map) item 37. Blind ("target not
     // connected", shown as dark gray "BLIND") covers "never queried yet",
     // "target unreachable/no target configured", and "a query or toggle
     // is currently in flight" -- shimStatusLabel_ never guesses REAL by
@@ -277,6 +277,13 @@ private:
     // its own call site. Never blocks or fails Play -- see
     // DispatcherVersionProbe's own class comment.
     void checkInjectorVersion();
+    // Best-effort, async, passwordless-only, never blocks Play: compares the
+    // injector files installed on the target with the manifest of the bundle
+    // this PC has (md5 of each file, see util/InjectorManifest.h and
+    // docs/adr/0014), and shows a status-bar warning naming what differs or is
+    // missing. Silent when there is no local bundle, the bundle has no
+    // manifest, or the target can't be reached without a password.
+    void verifyInjectorInstall();
     // Fires from onConfigureTriggered() once Configure is accepted --
     // resolves each configured camera id's REAL, target-authored
     // resolution (see net/CameraGeometryResolver.h) for whichever ids
@@ -286,6 +293,16 @@ private:
     // checkInjectorVersion(). No-op if currentTarget_ is empty or every
     // configured id is already cached for it.
     void resolveCameraGeometry();
+    // Drops camId's cached geometry for currentTarget_ (and the pool's
+    // copy of it) because something reported about that camera made the
+    // cached size suspect -- see docs/adr/0011 trigger 2. Returns true if
+    // a relearn was scheduled, false if that camera is still inside its
+    // cooldown (kGeometryRelearnCooldownSecs), so one that the board
+    // always rejects doesn't re-run the live query on every Play. The
+    // relearn itself is DEFERRED until the session is Idle (see
+    // applyState()): its live-query fallback runs qcarcam_test on the
+    // target, which must not overlap a running injection session.
+    bool invalidateCameraGeometry(int camId);
     // Runs InjectorBundleInstaller::installAsync() against `bundlePath`,
     // showing its confirm/credentials prompts via Qt::BlockingQueuedConnection
     // callbacks (the confirm dialog names the exact bundle file and lets
@@ -417,6 +434,11 @@ private:
     // target's own local Screen/EGL preview render is a still-valid,
     // independent reason to keep going).
     bool qcxVersionMismatch_ = false;
+    // True once the target's qcarcam_dispatcher reported a control-protocol
+    // version different from this CamSyringe's (net/DispatcherProtocol.h).
+    // Blocks Play and stops a running session, like qcxVersionMismatch_; reset
+    // when the target changes.
+    bool dispatcherProtocolMismatch_ = false;
     PlaybackState state_ = PlaybackState::Idle;
     camsyringe::DispatcherClient dispatcherClient_;
     // Owned here (not local to a function) so auth resolved once -- for
@@ -476,6 +498,13 @@ private:
     // that dialog's bottom-left; QDateTime() (invalid/default) means
     // "never read for this target".
     QMap<QString, QDateTime> geometryReadTimestamps_;
+    // Per-target, per-camera time of the last error-triggered invalidation
+    // (invalidateCameraGeometry()) -- in-memory only, the cooldown just has
+    // to outlive a Play/Stop cycle, not an app restart.
+    QMap<QString, QMap<int, QDateTime>> geometryInvalidatedAt_;
+    // Set by invalidateCameraGeometry(); consumed by applyState(Idle),
+    // which runs resolveCameraGeometry() once the session has ended.
+    bool geometryRelearnPending_ = false;
     // Owned directly here (not inside StreamPool) since it's a single,
     // session-wide replay independent of camera count -- BlfReplayer.h's
     // own class comment covers why this needs its own thread the same way
@@ -530,7 +559,7 @@ private:
     // constructor) so it wins the z-order on the rare chance both are
     // visible at once. statusIndicatorArea_ itself IS explicitly raised
     // above generalStatusLabel_ too (a sibling now, not a child of it) --
-    // see qcarcam-injector/ARCHITECTURE.md item 37 and CONTEXT.md's "UI
+    // see qcarcam-injector/docs/adr/README.md (former ARCHITECTURE.md item map) item 37 and CONTEXT.md's "UI
     // requirements" for the full spec.
     QWidget* statusIndicatorArea_ = nullptr;
     // "SHIM" bold red / "REAL" normal green / "…" (Unknown) -- see

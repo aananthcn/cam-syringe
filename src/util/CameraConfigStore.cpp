@@ -1,5 +1,8 @@
 #include "util/CameraConfigStore.h"
 
+#include "util/ConfigFiles.h"
+
+#include <algorithm>
 #include <cstdio>
 
 #include <QCoreApplication>
@@ -10,9 +13,12 @@
 
 namespace camsyringe {
 
-QString CameraConfigStore::filePath() {
-    return QCoreApplication::applicationDirPath() + "/camera_configs.json";
-}
+namespace {
+constexpr int kSchemaVersion = 1;
+constexpr const char* kFileName = "camera_configs.json";
+}  // namespace
+
+QString CameraConfigStore::filePath() { return ConfigFiles::primaryPath(kFileName); }
 
 void CameraConfigStore::save(const QMap<QString, QMap<int, ResolvedCameraGeometry>>& cache,
                               const QMap<QString, QDateTime>& readTimestamps) {
@@ -37,17 +43,25 @@ void CameraConfigStore::save(const QMap<QString, QMap<int, ResolvedCameraGeometr
         }
         targets[target] = targetObj;
     }
+    // Keep any keys another release wrote that this one doesn't know about (see ConfigFiles).
     QJsonObject root;
+    for (const QByteArray& existing : ConfigFiles::readAll(kFileName)) {
+        const QJsonDocument doc = QJsonDocument::fromJson(existing);
+        if (doc.isObject()) {
+            root = doc.object();
+            break;
+        }
+    }
+    // Never lower a version a newer release wrote: it may rely on it to read its own keys.
+    root["schemaVersion"] = std::max(kSchemaVersion, root.value("schemaVersion").toInt(0));
     root["targets"] = targets;
 
-    const QString path = filePath();
-    QFile file(path);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        std::fprintf(stderr, "CameraConfigStore: couldn't write %s: %s\n", path.toUtf8().constData(),
-                     file.errorString().toUtf8().constData());
-        return;
+    QStringList errors;
+    if (!ConfigFiles::write(kFileName, QJsonDocument(root).toJson(QJsonDocument::Indented), nullptr, &errors)) {
+        for (const QString& line : errors) {
+            std::fprintf(stderr, "CameraConfigStore: couldn't write %s\n", line.toUtf8().constData());
+        }
     }
-    file.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
 }
 
 void CameraConfigStore::load(QMap<QString, QMap<int, ResolvedCameraGeometry>>* cache,
@@ -55,19 +69,22 @@ void CameraConfigStore::load(QMap<QString, QMap<int, ResolvedCameraGeometry>>* c
     cache->clear();
     readTimestamps->clear();
 
-    QFile file(filePath());
-    if (!file.open(QIODevice::ReadOnly)) {
-        return; // no file yet -- first launch, or nothing has ever been read
+    QJsonObject root;
+    bool parsed = false;
+    for (const QByteArray& copy : ConfigFiles::readAll(kFileName)) {
+        QJsonParseError parseError{};
+        const QJsonDocument doc = QJsonDocument::fromJson(copy, &parseError);
+        if (parseError.error == QJsonParseError::NoError && doc.isObject()) {
+            root = doc.object();
+            parsed = true;
+            break;
+        }
     }
-    QJsonParseError parseError{};
-    QJsonDocument doc = QJsonDocument::fromJson(file.readAll(), &parseError);
-    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
-        std::fprintf(stderr, "CameraConfigStore: couldn't parse %s: %s\n",
-                     filePath().toUtf8().constData(), parseError.errorString().toUtf8().constData());
-        return;
+    if (!parsed) {
+        return;  // no usable copy yet -- first launch, or nothing has ever been read
     }
 
-    const QJsonObject targets = doc.object().value("targets").toObject();
+    const QJsonObject targets = root.value("targets").toObject();
     for (auto it = targets.constBegin(); it != targets.constEnd(); ++it) {
         const QString target = it.key();
         const QJsonObject targetObj = it.value().toObject();
@@ -83,6 +100,9 @@ void CameraConfigStore::load(QMap<QString, QMap<int, ResolvedCameraGeometry>>* c
         QMap<int, ResolvedCameraGeometry> perCam;
         for (const QJsonValue& v : targetObj.value("cameras").toArray()) {
             const QJsonObject cam = v.toObject();
+            if (!cam.contains("camId")) {
+                continue; // a missing id must not read as id 0, which is a real id
+            }
             ResolvedCameraGeometry r;
             r.camId = cam.value("camId").toInt();
             r.ok = cam.value("ok").toBool();

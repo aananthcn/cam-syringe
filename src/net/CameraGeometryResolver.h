@@ -34,7 +34,7 @@ struct ResolvedCameraGeometry {
 // Discovers each configured camera's REAL, vehicle-engineer-authored
 // resolution from the target itself, instead of guessing or requiring a
 // human to manually match env vars -- see qcarcam-injector/
-// ARCHITECTURE.md items 38/39 for the "display renders blank" bug this
+// former ARCHITECTURE.md (map: docs/adr/README.md) items 38/39 for the "display renders blank" bug this
 // exists to prevent: at least one real camera ID's display pipe
 // (confirmed live via slog2's WFD_PIPELINE_SCALE_RANGE trace) supports
 // NO scaling at all, so the injected content must be pixel-dimension-
@@ -92,7 +92,7 @@ public:
     // this can take anywhere from under a second (declared-XML ids) to
     // tens of seconds per id (the live-query fallback's worst case, a
     // cold display-service start), so a caller reading many ids at once
-    // (e.g. CameraSettingsDialog's full 1-16 sweep) needs SOME feedback
+    // (e.g. CameraSettingsDialog's full 0-16 sweep) needs SOME feedback
     // that it's still working, not just a single callback at the very
     // end. Invoked on the SAME background thread as Callback -- same
     // marshaling requirement.

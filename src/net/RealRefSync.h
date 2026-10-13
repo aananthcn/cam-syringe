@@ -26,7 +26,7 @@ namespace camsyringe {
 // guaranteed to match whatever board a bundle ends up on, so a copy
 // travelling that path is fundamentally unable to promise
 // board-correctness the way copying straight from the board's own
-// currently-genuine file can. See qcarcam-injector/ARCHITECTURE.md's
+// currently-genuine file can. See qcarcam-injector/docs/adr/README.md (former ARCHITECTURE.md item map)'s
 // real-ref item for the fuller story.
 //
 // Two callers, both needing this independently of each other:

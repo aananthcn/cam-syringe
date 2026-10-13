@@ -195,9 +195,7 @@ CameraConfigDialog::CameraConfigDialog(const QString& initialTarget, int initial
         updateResolvedLabel(i);
     }
 
-    injectOnlyCheck_ = new QCheckBox(
-        tr("Inject only (no local preview render on target -- see qcarcam_dispatcher's --inject-only)"),
-        this);
+    injectOnlyCheck_ = new QCheckBox(tr("Inject only (no display on target)"), this);
     injectOnlyCheck_->setChecked(initialInjectOnly);
     rootLayout->addWidget(injectOnlyCheck_);
 

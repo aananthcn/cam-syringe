@@ -11,8 +11,8 @@ namespace camsyringe {
 // Persists MainWindow's geometryCache_/geometryReadTimestamps_ (each
 // configured target's per-camera-id resolved resolution, from "Settings
 // > CamSyringe Configurations"'s automatic resolve and "Settings >
-// Camera Configs"'s explicit Read) to a plain JSON file next to the
-// running binary -- explicit requirement: readable/editable without
+// Camera Configs"'s explicit Read) to a plain JSON file
+// (see ConfigFiles for where -- the install directory and ~/.cache, so a reinstall or upgrade keeps it) -- explicit requirement: readable/editable without
 // digging into an OS-specific config location (QSettings, used
 // elsewhere in this app for genuinely app-preference-shaped data like
 // InjectorBundleFinder's learned directories, is deliberately NOT reused

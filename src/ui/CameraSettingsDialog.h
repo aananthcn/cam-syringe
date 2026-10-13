@@ -18,7 +18,7 @@ class QTableWidget;
 namespace camsyringe::ui {
 
 // Modal, read-only viewer for "Settings > Camera": shows EVERY QCarCam id
-// the chip can address over GMSL2 (camsyringe::kMinCamId/kMaxCamId, 1-16
+// the chip can address over GMSL2 (camsyringe::kMinCamId/kMaxCamId, 0-16
 // -- see MainWindow::onCameraSettingsTriggered()'s own comment), each
 // with its REAL, target-authored resolution -- the same data
 // CameraGeometryResolver already resolves for MainWindow's own
@@ -41,7 +41,7 @@ class CameraSettingsDialog : public QDialog {
 public:
     // ssh: MainWindow's own sshSession_ (caller-owned, outlives this
     // modal dialog). camIds: the full set of ids to show a row for --
-    // MainWindow passes every id 1-16 (see class comment), not just the
+    // MainWindow passes every id 0-16 (see class comment), not just the
     // currently configured ones; sorted ascending internally before any
     // resolve (CameraGeometryResolver's own fallback-order requirement).
     // initialResults/initialReadTime: seeds
@@ -76,7 +76,7 @@ private:
 
     QTableWidget* table_ = nullptr;
     // Bottom-left corner: readTimeLabel_ normally, swapped for
-    // progressBar_ for the duration of a Read (a full 1-16 sweep can take
+    // progressBar_ for the duration of a Read (a full 0-16 sweep can take
     // tens of seconds -- see CameraGeometryResolver::ProgressCallback's
     // own comment -- so a static "Reading from target..." wasn't enough
     // feedback that it's still actually making progress, not stuck).
