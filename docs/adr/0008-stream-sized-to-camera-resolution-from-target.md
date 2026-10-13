@@ -1,7 +1,8 @@
 # 0008. The PC sizes each stream to the camera's own resolution, read from the target
 
-Status: Accepted. The PC side is implemented. The target side does not yet
-follow it, see "Implementation status".
+Status: Accepted. The PC side is implemented, with a 1080p cap on the canvas
+(ADR 0015). The target side does not yet follow it, see "Implementation
+status".
 
 ## Context
 
@@ -46,6 +47,10 @@ camera.
   at exactly that canvas: the source is aspect-fitted and centred
   (letterboxed), and **may be scaled up**, because the goal is an exact match.
   The target is not expected to rescale CamSyringe's streams.
+- **The canvas is capped at 1920×1080.** A camera larger than that, such as
+  the bench's 3840×2160 cam 2, is scaled down to fit. See
+  [ADR 0015](0015-stream-canvas-capped-at-1080p.md) for the reason and
+  evidence.
 - **When the size is unknown**, the stream falls back to the old cap-only
   behaviour: never above 1920×1080, aspect preserved.
 
@@ -60,12 +65,11 @@ camera.
   its own size and then rescaled to 1080p before injection. Making the ring
   and the injector's buffer lists follow each camera's real size needs the
   size to travel with the declaration. This has not been designed yet.
-- **Not verified:** whether the 2026-10-12 decoder failure came from a stream
-  larger than the camera size, from a camera that really is 4K, or from a
-  `wasFallback` or `ok=false` result silently using the wrong size. The first
-  thing to read is CamSyringe's stderr line for that run:
-  `camsyringe[camN]: WxH -> WxH canvas (target-matched ...)` versus the plain
-  `WxH -> WxH` of the cap-only path.
+- **Resolved (2026-10-13):** the 2026-10-12 decoder failure came from a camera
+  that really is 4K: the size was read from the target (not a fallback), and
+  an exact 4K canvas reproduced the failure. Hence the 1080p cap
+  ([ADR 0015](0015-stream-canvas-capped-at-1080p.md)), which is an interim
+  measure until the target side can size its decoder and ring per camera.
 
 ## Consequences
 
@@ -74,8 +78,9 @@ camera.
   today.
 - A failed discovery silently sends a capped 1080p stream. Whether that
   matches the camera is unknown in that case.
-- A camera that is truly 4K asks the hardware decoder for 4K-class memory, and
-  that can fail independently of this decision (the 2026-10-12 symptom).
+- A camera that is truly 4K is now sent at 1080p, so it no longer asks the
+  hardware decoder for 4K-class memory (the 2026-10-12 symptom). What the
+  target does with a camera-sized stream above 1080p stays unknown.
 - `qcarcam-injector`'s receiver rescale stays as a safety net for other
   senders such as `camera-streamer-pc.sh`. For CamSyringe it is a fallback,
   not the design.

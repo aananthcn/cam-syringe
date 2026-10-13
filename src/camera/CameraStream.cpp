@@ -298,6 +298,18 @@ bool CameraStream::open() {
         // an exact match, not just an upper bound.
         outWidth_ = forcedWidth_;
         outHeight_ = forcedHeight_;
+        // ...but never above kMaxWidth x kMaxHeight (docs/adr/0008): this
+        // board's hardware H.264 decoder fails to open on a 4K stream
+        // (HwVideoDecoder START(output) failed, confirmed live with a
+        // 3840x2160 camera). A larger camera is scaled down to fit, aspect
+        // preserved; the target's receiver rescales to its ring size anyway.
+        const bool capped = outWidth_ > kMaxWidth || outHeight_ > kMaxHeight;
+        if (capped) {
+            const double fit = std::min(static_cast<double>(kMaxWidth) / outWidth_,
+                                         static_cast<double>(kMaxHeight) / outHeight_);
+            outWidth_ = std::max(static_cast<int>(outWidth_ * fit) & ~1, 2);
+            outHeight_ = std::max(static_cast<int>(outHeight_ * fit) & ~1, 2);
+        }
         double scale = std::min(static_cast<double>(outWidth_) / decCtx_->width,
                                  static_cast<double>(outHeight_) / decCtx_->height);
         contentWidth_ = std::max(static_cast<int>(decCtx_->width * scale) & ~1, 2);
@@ -305,9 +317,10 @@ bool CameraStream::open() {
         contentOffsetX_ = ((outWidth_ - contentWidth_) / 2) & ~1;
         contentOffsetY_ = ((outHeight_ - contentHeight_) / 2) & ~1;
         std::fprintf(stderr,
-                     "camsyringe[%s]: %dx%d -> %dx%d canvas (target-matched; content %dx%d at "
+                     "camsyringe[%s]: %dx%d -> %dx%d canvas (%s; content %dx%d at "
                      "+%d,+%d)\n",
                      logLabel().c_str(), decCtx_->width, decCtx_->height, outWidth_, outHeight_,
+                     capped ? "target-matched, capped from camera size" : "target-matched",
                      contentWidth_, contentHeight_, contentOffsetX_, contentOffsetY_);
     } else {
         computeOutputSize(decCtx_->width, decCtx_->height, kMaxWidth, kMaxHeight, &outWidth_,

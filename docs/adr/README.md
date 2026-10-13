@@ -58,3 +58,4 @@ to carry the comment today.
 - [0012. Play is blocked while the target is in REAL mode](0012-play-is-blocked-while-the-target-is-in-real-mode.md)
 - [0013. Settings > Camera Injection is the one place for session settings, and it is remembered](0013-camera-injection-dialog-configs-must-be-cached.md)
 - [0014. The installed injector is verified against the bundle, and the control protocol is versioned](0014-installed-injector-is-verified-and-protocol-version-is-checked.md)
+- [0015. The stream canvas is capped at 1920×1080, even for a larger camera](0015-stream-canvas-capped-at-1080p.md)
