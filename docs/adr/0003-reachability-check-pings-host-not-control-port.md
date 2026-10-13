@@ -12,7 +12,7 @@ proceeding and only discovering a wrong/dead IP many seconds later via
 The first version of this pre-flight gate (`TargetReachabilityProbe`)
 answered that question with a raw TCP connect to the CONTROL PORT
 itself. This was wrong, confirmed live: a genuinely correct, reachable,
-SSH-able target (`192.168.1.4` — its SHIM/REAL status query, entirely
+SSH-able target (`192.168.1.1` — its SHIM/REAL status query, entirely
 independent, succeeded over SSH at the same time) got reported as "not
 responding — check the target IP address" and had its whole session
 auto-stopped, because `qcarcam_dispatcher` simply hadn't been started on
