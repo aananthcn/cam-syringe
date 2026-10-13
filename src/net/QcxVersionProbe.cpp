@@ -32,10 +32,15 @@ void QcxVersionProbe::checkAsync(TargetSsh& ssh, QString target, QString sshUser
         // redirected away, so it flows straight into this ssh.run()
         // call's own captured stdout/stderr, same idiom as
         // Ipv6SupportProbe's own dispatcher probe.
+        //
+        // `kill -9`, not a plain `kill`: qcarcam_injector ignores SIGTERM
+        // (confirmed live on the board -- all its threads survive it), so a
+        // plain kill leaked one scratch injector per CamSyringe launch. The
+        // scratch ring leaves nothing behind in /dev/shmem after SIGKILL.
         TargetSsh::Result res = ssh.run(
             target,
             "/var/opt/bin/qcarcam_injector 99 --ring-name /camsyringe_qcxprobe_scratch "
-            "--width 64 --height 64 & IP=$!; sleep 2; kill $IP 2>/dev/null; wait $IP 2>/dev/null",
+            "--width 64 --height 64 & IP=$!; sleep 2; kill -9 $IP 2>/dev/null; wait $IP 2>/dev/null",
             8000);
 
         const QString combined = res.stdOut + "\n" + res.stdErr;
