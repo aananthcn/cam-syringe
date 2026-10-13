@@ -18,7 +18,12 @@ constexpr int kMaxCameras = 4;
 // full set of ids "Settings > Camera" reads target configuration for,
 // deliberately independent of whichever ids are actually chosen for
 // injection in the current session -- see that dialog's own comment).
-constexpr int kMinCamId = 1;
+// QCarCam id range any camera may use (docs/adr/0016): 0 to 16, since it isn't
+// known whether a board's developers count from 0 or 1. The single definition --
+// every id check and id sweep derives from these two, never from a literal.
+// 0 is a real id, never "unset". qcarcam-injector's own dispatcher still
+// accepts 1-16 only; see ADR 0016's implementation status.
+constexpr int kMinCamId = 0;
 constexpr int kMaxCamId = 16;
 
 } // namespace camsyringe

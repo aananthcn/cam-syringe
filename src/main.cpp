@@ -40,8 +40,8 @@ namespace {
 constexpr const char* kDefaultTarget = camsyringe::kDefaultTargetIPv4;
 constexpr const char* kDefaultSshUser = "root";
 constexpr int kDefaultControlPort = 5000;
-constexpr int kMinCamId = 1;
-constexpr int kMaxCamId = 16; // this target's allcamtest range, see qcarcam-injector/docs/adr/README.md (former ARCHITECTURE.md item map)
+using camsyringe::kMaxCamId; // the id range is defined once, in camera/PortScheme.h (docs/adr/0016)
+using camsyringe::kMinCamId;
 constexpr const char* kDefaultBlfInterface = "enp6s0";
 
 void printUsage(const char* prog) {
@@ -86,6 +86,21 @@ void printUsage(const char* prog) {
 // ambiguous the moment ids go double-digit or a range is wanted (e.g.
 // "1-2-8-9" can't tell a delimiter dash from a range dash apart) -- see
 // qcarcam-injector's own CAM/FLAGS line protocol for the same reasoning.
+// One id: digits only, in full. std::atoi can't tell "0" from "abc" apart, and
+// 0 is a valid id (docs/adr/0016), so this is stricter. Range is checked later.
+bool parseOneId(const std::string& text, int& out) {
+    if (text.empty() || text.size() > 9) {
+        return false;
+    }
+    for (char c : text) {
+        if (c < '0' || c > '9') {
+            return false;
+        }
+    }
+    out = std::atoi(text.c_str());
+    return true;
+}
+
 bool parseCamIds(const std::string& spec, std::vector<int>& outIds, std::string& error) {
     outIds.clear();
     size_t pos = 0;
@@ -100,9 +115,10 @@ bool parseCamIds(const std::string& spec, std::vector<int>& outIds, std::string&
         }
         size_t dash = token.find('-');
         if (dash != std::string::npos && dash > 0 && dash + 1 < token.size()) {
-            int a = std::atoi(token.substr(0, dash).c_str());
-            int b = std::atoi(token.substr(dash + 1).c_str());
-            if (a <= 0 || b <= 0 || a > b) {
+            int a = 0;
+            int b = 0;
+            if (!parseOneId(token.substr(0, dash), a) || !parseOneId(token.substr(dash + 1), b) ||
+                a > b) {
                 error = "invalid range '" + token + "' in --cam-ids";
                 return false;
             }
@@ -110,8 +126,8 @@ bool parseCamIds(const std::string& spec, std::vector<int>& outIds, std::string&
                 outIds.push_back(v);
             }
         } else {
-            int v = std::atoi(token.c_str());
-            if (v <= 0) {
+            int v = 0;
+            if (!parseOneId(token, v)) {
                 error = "invalid id '" + token + "' in --cam-ids";
                 return false;
             }

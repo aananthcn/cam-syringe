@@ -37,7 +37,7 @@ target for no benefit.
      `ERROR`/`PREVIEW_ERROR` for that camera (which is how a receiver that
      exits because the decoder couldn't open shows up on the PC).
   3. **A user action.** Selecting **Settings > Camera Configs** starts an
-     explicit read of every camera id (1-16) on the current target and
+     explicit read of every camera id (0-16, ADR 0016) on the current target and
      refreshes the cache and its timestamp.
 - **Otherwise the cached values are used as is.** A normal Configure apply
   seeds each stream's target size from the cache and resolves only the ids

@@ -24,7 +24,7 @@ void QcxVersionProbe::checkAsync(TargetSsh& ssh, QString target, QString sshUser
             callback(result);
             return;
         }
-        // Scratch id (99, outside the real 1-16 range) and scratch ring
+        // Scratch id (99, outside the real 0-16 range) and scratch ring
         // name -- never collides with, or disturbs, an already-running
         // real session. Confirmed live: this reaches the shim's own
         // probeRealInputs() diagnostic output in ~2s, no display-service

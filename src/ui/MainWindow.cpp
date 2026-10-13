@@ -1269,7 +1269,7 @@ void MainWindow::onCameraSettingsTriggered() {
     }
 
     // Every QCarCam id the chip can address over GMSL2 (camsyringe::
-    // kMinCamId/kMaxCamId, 1-16) -- deliberately NOT just pool_'s
+    // kMinCamId/kMaxCamId, 0-16) -- deliberately NOT just pool_'s
     // currently-configured injection camera ids. Explicit requirement:
     // this dialog reads the target's real configuration for every camera
     // the hardware could have, not only whichever ones this session

@@ -100,6 +100,9 @@ void CameraConfigStore::load(QMap<QString, QMap<int, ResolvedCameraGeometry>>* c
         QMap<int, ResolvedCameraGeometry> perCam;
         for (const QJsonValue& v : targetObj.value("cameras").toArray()) {
             const QJsonObject cam = v.toObject();
+            if (!cam.contains("camId")) {
+                continue; // a missing id must not read as id 0, which is a real id
+            }
             ResolvedCameraGeometry r;
             r.camId = cam.value("camId").toInt();
             r.ok = cam.value("ok").toBool();

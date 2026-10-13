@@ -105,7 +105,8 @@ SessionConfig SessionConfigStore::load() {
     for (const QJsonValue& v : cameras) {
         const QJsonObject cam = v.toObject();
         const QString videoFile = cam.value("videoFile").toString();
-        const int camId = cam.value("camId").toInt();
+        // A missing key must not read as id 0, which is now a real id.
+        const int camId = cam.value("camId").toInt(-1);
         if (camId < kMinCamId || camId > kMaxCamId) {
             camerasOk = false;
             break;

@@ -150,6 +150,30 @@ int main(int argc, char** argv)
     CHECK(back.value("192.168.1.1").value(8).width == 3840);
     CHECK(backStamps.contains("192.168.1.1"));
 
+    // --- 9b. camera id 0 is a real id (docs/adr/0016): it round-trips, 17 is refused, and a
+    //         MISSING camId key is not mistaken for id 0
+    removeAll(A); removeAll(B);
+    {
+        SessionConfig z = sample("192.168.1.1"); z.camIds = {0, 16};
+        CHECK(SessionConfigStore::save(z));
+        SessionConfig zr = SessionConfigStore::load();
+        CHECK(zr.valid); CHECK((zr.camIds == std::vector<int>{0, 16}));
+        removeAll(A); removeAll(B);
+        writeFile(fA, R"({"target":"192.168.1.1","cameras":[{"videoFile":"/v/a.mp4","camId":17}]})");
+        CHECK(SessionConfigStore::load().camIds.empty());
+        writeFile(fA, R"({"target":"192.168.1.1","cameras":[{"videoFile":"/v/a.mp4"}]})");
+        CHECK(SessionConfigStore::load().camIds.empty());
+        removeAll(A); removeAll(B);
+        writeFile(A + "/camera_configs.json",
+                  R"({"schemaVersion":1,"targets":{"10.1.1.1":{"cameras":[
+                      {"camId":0,"ok":true,"width":1280,"height":720},
+                      {"ok":true,"width":9,"height":9}]}}})");
+        QMap<QString, QMap<int, ResolvedCameraGeometry>> c0; QMap<QString, QDateTime> s0;
+        CameraConfigStore::load(&c0, &s0);
+        CHECK(c0.value("10.1.1.1").size() == 1);
+        CHECK(c0.value("10.1.1.1").value(0).width == 1280);
+    }
+
     // --- 10. nothing anywhere: load says "no config", never crashes
     removeAll(A); removeAll(B);
     CHECK(!SessionConfigStore::load().valid);
