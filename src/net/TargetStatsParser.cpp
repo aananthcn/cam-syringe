@@ -21,12 +21,17 @@ QString TargetStatsParser::feed(const QString& rawLine, int64_t nowMs) {
 
     static const QRegularExpression kClient(QStringLiteral(
         R"(shim-server: client (\d+) pid=(\d+) state=(\w+) mode=(\w+) buffers=\d+ delivered=\d+ )"
-        R"(released=(\d+) requested=\d+ missed=(\d+) last_call_ms=(\d+))"));
+        R"(released=(\d+) requested=(\d+) missed=(\d+) last_call_ms=(\d+))"));
     static const QRegularExpression kDetached(QStringLiteral(R"(shim-server: client (\d+) detached)"));
 
     if (auto m = kClient.match(line); m.hasMatch()) {
         AppClient& a = apps_[m.captured(1).toInt()];
-        const uint64_t released = m.captured(5).toULongLong();
+        // The counter that shows the application consuming frames depends on its mode: a classic
+        // application hands each frame back with ReleaseFrame, a request-mode one (qcarcam_test)
+        // never does and instead re-submits the buffer, so its `requested` count is what moves.
+        // Seen on the bench: request mode, released=0, requested tracking delivered at 28.7 fps.
+        const bool requestMode = m.captured(4) == QStringLiteral("request");
+        const uint64_t released = requestMode ? m.captured(6).toULongLong() : m.captured(5).toULongLong();
         if (a.seenMs > 0 && released >= a.released && nowMs > a.seenMs) {
             a.fps = static_cast<double>(released - a.released) /
                     (static_cast<double>(nowMs - a.seenMs) / 1000.0);
@@ -38,8 +43,8 @@ QString TargetStatsParser::feed(const QString& rawLine, int64_t nowMs) {
         a.state = m.captured(3);
         a.mode = m.captured(4);
         a.released = released;
-        a.missed = m.captured(6).toULongLong();
-        a.lastCallMs = m.captured(7).toULongLong();
+        a.missed = m.captured(7).toULongLong();
+        a.lastCallMs = m.captured(8).toULongLong();
         a.seenMs = nowMs > 0 ? nowMs : 1;
         return QString();
     }

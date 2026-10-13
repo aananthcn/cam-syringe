@@ -32,8 +32,11 @@ on the target (`/tmp/qcarcam_dispatcher_cam<id>_injector.log` and
   - **Application columns** `app pid`, `mode`, `app fps`, `missed`, `last call`:
     what the attached application really did, **taken from the SHIM server's
     per-application lines** (injector ADR 0023), not from the application's own
-    output. `app fps` is the rate it hands frames back (`ReleaseFrame`), which is
-    the evidence that it consumed them; `missed` counts frames it didn't take;
+    output. `app fps` is the rate at which it takes frames: `ReleaseFrame` calls for a
+    classic-mode application, buffer re-submissions (`requested`) for a request-mode one
+    such as `qcarcam_test`, which never calls `ReleaseFrame`. Run on the bench with
+    `qcarcam_test -noDisplay`, request mode showed `released=0` while `requested` tracked
+    `delivered` at 28.7 fps; `missed` counts frames it didn't take;
     `last call` is the time since it last called into the SHIM. An older injector
     doesn't print these lines and the columns show `-`.
   - `corrupt`: corrupt packets seen since the session started.

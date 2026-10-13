@@ -58,6 +58,13 @@ int main() {
     q.feed("[qcarcam-injector] shim-server: client 1 pid=312 state=started mode=classic buffers=4 delivered=250 released=248 requested=0 missed=2 last_call_ms=20", 6000);
     TargetStatsSnapshot a2 = q.snapshot(6000);
     CHECK(a2.haveAppRate); CHECK(a2.appFps > 29.9 && a2.appFps < 30.1); CHECK(a2.appMissed == 2); CHECK(a2.appLastCallMs == 20);
+    // request mode (what qcarcam_test does, from the bench): released stays 0, requested moves
+    TargetStatsParser rq(2);
+    rq.feed("[qcarcam-injector] shim-server: client 1 pid=11505766 state=started mode=request buffers=18 delivered=392 released=0 requested=396 missed=1 last_call_ms=12", 1000);
+    rq.feed("[qcarcam-injector] shim-server: client 1 pid=11505766 state=started mode=request buffers=18 delivered=528 released=0 requested=532 missed=1 last_call_ms=12", 6000);
+    TargetStatsSnapshot r1 = rq.snapshot(6000);
+    CHECK(r1.haveAppRate); CHECK(r1.appFps > 27.0 && r1.appFps < 27.5); CHECK(r1.appMode == "request");
+
     // a detached application disappears; a silent one ages out
     q.feed("[qcarcam-injector] shim-server: client 1 detached (goodbye; 250 frames delivered)", 7000);
     CHECK(!q.snapshot(7000).haveApp);
