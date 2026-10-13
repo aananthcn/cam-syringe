@@ -436,6 +436,11 @@ private:
     // target's own local Screen/EGL preview render is a still-valid,
     // independent reason to keep going).
     bool qcxVersionMismatch_ = false;
+    // docs/adr/0018: non-empty when the target is not a supported platform (a QNX version
+    // other than 8, or an injector that can't load against the board's libraries). Blocks
+    // Play and stops a running session, whatever --inject-only says: nothing can be injected
+    // there. Reset when the target changes.
+    QString targetUnsupportedReason_;
     // True once the target's qcarcam_dispatcher reported a control-protocol
     // version different from this CamSyringe's (net/DispatcherProtocol.h).
     // Blocks Play and stops a running session, like qcxVersionMismatch_; reset

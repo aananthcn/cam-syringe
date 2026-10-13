@@ -61,3 +61,4 @@ to carry the comment today.
 - [0015. The stream canvas is capped at 1920×1080, even for a larger camera](0015-stream-canvas-capped-at-1080p.md)
 - [0016. Any QCarCam id from 0 to 16 can be injected, and no id is special-cased](0016-any-camera-id-0-to-16-and-no-hardcoded-id-list.md)
 - [0017. Live target-side statistics are printed on the PC terminal](0017-live-target-statistics-on-the-pc-terminal.md)
+- [0018. The supported target is QNX 8.0 with the current Qualcomm BSP, and it is checked on connect](0018-supported-target-platform-is-qnx-8-and-is-checked-on-connect.md)

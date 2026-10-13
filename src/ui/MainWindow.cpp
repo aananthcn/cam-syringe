@@ -441,6 +441,15 @@ void MainWindow::applyState(PlaybackState state) {
 }
 
 void MainWindow::startStreaming() {
+    // docs/adr/0018: an unsupported target (QNX version, or programs that can't load there)
+    // can't inject anything, so refuse before declaring anything to it.
+    if (!targetUnsupportedReason_.isEmpty()) {
+        showGeneralStatus(
+            tr("Cannot start: %1 is not a supported target -- %2. See docs/adr/0018.")
+                .arg(currentTarget_, targetUnsupportedReason_),
+            /*isError=*/true);
+        return;
+    }
     // REQUIREMENT: refuse to start at all under the same condition
     // maybeWarnAboutQcxVersion()'s callback actively stops an
     // already-Playing session for -- see qcxVersionMismatch_'s own
@@ -1248,6 +1257,7 @@ void MainWindow::onConfigureTriggered() {
     // starts -- see qcxVersionMismatch_'s own comment for why a stale
     // true from a previous target must never survive to block Play here.
     qcxVersionMismatch_ = false;
+    targetUnsupportedReason_.clear();
     dispatcherProtocolMismatch_ = false;
     maybeWarnAboutQcxVersion(currentTarget_);
     blfPath_ = dialog.blfPath();
@@ -1748,6 +1758,33 @@ void MainWindow::maybeWarnAboutQcxVersion(const QString& target) {
                     }
                     if (!result.ok) {
                         return; // inconclusive -- never warn/act on a non-result
+                    }
+                    // docs/adr/0018: checked first -- on an unsupported target the
+                    // version-mismatch result below is meaningless.
+                    targetUnsupportedReason_.clear();
+                    if (result.unsupportedOs) {
+                        targetUnsupportedReason_ =
+                            tr("it runs %1, and this build supports only QNX %2 with the "
+                               "current Qualcomm BSP")
+                                .arg(result.osRelease)
+                                .arg(camsyringe::QcxVersionProbe::kSupportedQnxMajor);
+                    } else if (!result.libraryError.isEmpty()) {
+                        targetUnsupportedReason_ =
+                            tr("the injector can't load there (%1), which means a different "
+                               "QNX or Qualcomm BSP than this build supports")
+                                .arg(result.libraryError);
+                    }
+                    if (!targetUnsupportedReason_.isEmpty()) {
+                        qcxVersionMismatch_ = false;
+                        if (state_ == PlaybackState::Playing || state_ == PlaybackState::Paused) {
+                            onStopTriggered();
+                        }
+                        showGeneralStatus(
+                            tr("%1 is not a supported target -- %2. Play is blocked. See "
+                               "docs/adr/0018.")
+                                .arg(target, targetUnsupportedReason_),
+                            /*isError=*/true);
+                        return;
                     }
                     qcxVersionMismatch_ = result.versionMismatch;
                     if (!result.versionMismatch) {

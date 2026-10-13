@@ -68,12 +68,30 @@ public:
         // line wasn't seen (e.g. versionMismatch is false, or an
         // unexpectedly different failure occurred).
         QString builtVersion;
+        // docs/adr/0018: the target's OS as `uname -sr` printed it ("QNX 8.0.0"), empty if
+        // it couldn't be read.
+        QString osRelease;
+        // true: the target reports a QNX major version other than kSupportedQnxMajor.
+        // Never true when the OS couldn't be read: an unknown OS is not blocked.
+        bool unsupportedOs = false;
+        // The loader's own complaint if the injector couldn't even start ("unknown symbol:
+        // ... referenced from <lib>", a missing library): a QNX/BSP this bundle wasn't built
+        // for. Empty when the injector loaded.
+        QString libraryError;
     };
+
+    // The only QNX major version this build supports (docs/adr/0018).
+    static constexpr int kSupportedQnxMajor = 8;
     using Callback = std::function<void(Result)>;
 
     // Runs on its own background thread; callback fires from that same
     // thread, NOT marshaled to the GUI thread -- callers must do that
     // themselves (same convention as Ipv6SupportProbe::checkAsync).
+    // Pure: reads `uname -sr`'s output (docs/adr/0018). Fills osRelease/unsupportedOs only.
+    static void classifyOs(const QString& unameOutput, Result* result);
+    // Pure: the first loader-failure line in the injector's output, or empty.
+    static QString findLibraryError(const QString& injectorOutput);
+
     static void checkAsync(TargetSsh& ssh, QString target, QString sshUser, QString sshKeyPath,
                             Callback callback);
 };
