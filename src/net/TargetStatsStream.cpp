@@ -31,10 +31,28 @@ bool TargetStatsStream::start() {
     }
     const QString inj = QStringLiteral("/tmp/qcarcam_dispatcher_cam%1_injector.log").arg(camId_);
     const QString rcv = QStringLiteral("/tmp/qcarcam_dispatcher_cam%1_receiver.log").arg(camId_);
-    // `exec tail` so the pid it prints IS the tail's (one simple command, no
-    // backgrounding: docs/adr/0010). -n 0: only what happens from now on.
-    const QString remote =
-        QStringLiteral("sh -c 'echo PID $$; exec tail -n 0 -f %1 %2'").arg(inj, rcv);
+    // Not `tail -f`: the v14.4.1 BSP's tail fails with "xnotify_add failed ...
+    // Function not implemented", even on a plain file in /tmp. So poll instead:
+    // once a second, count each log's complete lines (wc -l) and print the new
+    // ones (sed). Only what is written from now on is printed (the counts are
+    // primed first, output discarded), a file that doesn't exist yet counts as
+    // 0, and a log that shrinks (the dispatcher truncates it when it respawns the
+    // injector) is read again from the top. Whole lines only, so two files'
+    // output never interleaves mid-line. The pid it prints is the shell's own
+    // (`$$`), so Stop's `kill <pid>` ends it; its `sleep` child exits within a
+    // second. The receiver prints the stream size once, when it opens the stream, which
+    // is before READY and so before this starts; so the last such line is printed once
+    // up front (else the report's size column stays "-"). One simple command to the outer shell, no backgrounding (docs/adr/0010);
+    // checked in the board's own ksh, not just bash.
+    const QString script = QStringLiteral(
+        "echo PID $$; "
+        "poll() { eval o=\\${$2}; n=0; if [ -r \"$1\" ]; then n=`wc -l < \"$1\"`; fi; "
+        "n=$(($n+0)); if [ $n -lt $o ]; then o=0; fi; "
+        "if [ $n -gt $o ]; then sed -n \"$((o+1)),${n}p\" \"$1\"; fi; eval $2=$n; }; "
+        "A=%1; B=%2; oa=0; ob=0; poll \"$A\" oa >/dev/null; poll \"$B\" ob >/dev/null; "
+        "if [ -r \"$B\" ]; then grep \"FrameReceiver: stream is\" \"$B\" | tail -n 1; fi; "
+        "while :; do poll \"$A\" oa; poll \"$B\" ob; sleep 1; done");
+    const QString remote = QStringLiteral("sh -c '%1'").arg(script.arg(inj, rcv));
     QStringList args;
     QProcessEnvironment env;
     if (!ssh_.sshInvocation(target_, remote, 3, &args, &env)) {
