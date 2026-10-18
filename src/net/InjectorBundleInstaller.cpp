@@ -57,6 +57,16 @@ void InjectorBundleInstaller::installAsync(TargetSsh& ssh, QString target, int c
         }
 
         QString bundleName = QFileInfo(bundlePath).fileName();
+        // docs/adr/0019: /tmp on the target is a 64 MB RAM disk and a bundle is ~32 MB, so a copy
+        // left by an earlier install (this class used to leave it) makes the next upload fail
+        // with "write remote ...: Failure". Clear every earlier bundle first.
+        TargetSsh::Result clean =
+            ssh.run(target, "rm -f /tmp/qcarcam_injector_bundle_*.bin", 15000);
+        if (!clean.ok()) {
+            onDone(false, "Failed to clear earlier bundle copies from /tmp on the target: " +
+                              clean.stdErr);
+            return;
+        }
         progress(-1, "Transferring " + bundleName + " to " + target + "...");
         TargetSsh::Result scp = ssh.scp(bundlePath, target, "/tmp/", 300000); // up to 5 min for ~180MB
         if (!scp.ok()) {
@@ -75,6 +85,10 @@ void InjectorBundleInstaller::installAsync(TargetSsh& ssh, QString target, int c
             return;
         }
 
+        // The installer has run; the uploaded copy is only taking RAM-disk space now (docs/adr/0019).
+        // Best-effort and kept on a failed install above, so it can be inspected or re-run by hand.
+        ssh.run(target, QString("rm -f /tmp/%1").arg(bundleName), 15000);
+
         progress(85, "Refreshing real-camera reference library on " + target + "...");
         // Best-effort, not fatal on failure -- see net/RealRefSync.h's own
         // comment for why this needs to run after every install
@@ -88,6 +102,15 @@ void InjectorBundleInstaller::installAsync(TargetSsh& ssh, QString target, int c
         // flow shouldn't block on it either -- deliberately not checked
         // against ok(), unlike every other step above.
         ssh.run(target, camsyringe::realRefSyncCommand(), 15000);
+
+        // docs/adr/0019: this project's own logs from earlier runs, so the new run's logs start
+        // clean and old ones aren't mistaken for them. Before the restart, which creates
+        // qcarcam_dispatcher.log afresh. Best effort, and only these names: the rest of /tmp
+        // (camera config, system logs) is not ours.
+        ssh.run(target,
+                "rm -f /tmp/qcarcam_dispatcher*.log /tmp/qcarcam_testapp_* "
+                "/tmp/qcarcam_test_report.txt",
+                15000);
 
         progress(90, "Restarting qcarcam_dispatcher on " + target + "...");
         // Restart so the new binary actually takes effect -- no separate
