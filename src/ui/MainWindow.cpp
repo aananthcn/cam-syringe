@@ -1528,6 +1528,14 @@ void MainWindow::runInjectorInstall(const QString& bundlePath, const QString& bu
                 [this, success, cancelled, summary, message]() {
                     installProgressBar_->setVisible(false);
                     showGeneralStatus(summary, /*isError=*/!success && !cancelled);
+                    if (success) {
+                        // docs/adr/0018: the "unsupported target" verdict came from the
+                        // injector that was installed BEFORE this one (the probe runs at launch
+                        // and on Configure only), so drop it and probe the new one -- else
+                        // Play stays blocked until the next launch.
+                        targetUnsupportedReason_.clear();
+                        maybeWarnAboutQcxVersion(currentTarget_);
+                    }
                     if (!success && !cancelled) {
                         QMessageBox box(QMessageBox::Critical, tr("Injector Install Failed"), message,
                                          QMessageBox::Ok, this);

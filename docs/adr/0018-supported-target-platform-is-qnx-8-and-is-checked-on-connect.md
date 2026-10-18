@@ -35,8 +35,19 @@ wrong platform.
 - **An unreadable or non-QNX `uname` is not blocked.** If the probe can't tell, it says
   nothing, like the other probes: an unknown is not a fault.
 - **The bundle installer repeats the library check at install time**
-  (`qnx_toolkit` ADR 0003): it runs `ldd` on the installed programs and exits 1 with
-  the loader's message if one can't load.
+  (`qnx_toolkit` ADR 0003): it starts each installed program with `--help` (not `ldd`,
+  which on QNX lists libraries without resolving symbols and so passed an injector that
+  then failed to start) and exits 1 with the loader's message if one can't load.
+
+## The verdict is refreshed after a bundle install
+
+The check runs at launch and on Configure. Installing a bundle from CamSyringe
+replaces the injector but did not re-run it, so a verdict taken from the old
+injector (`unknown symbol ... CameraDB ...`, from the missing `-lcameradb`, see
+`qcarcam-injector` ADR 0025) stayed set and Play stayed blocked ("Cannot start:
+... is not a supported target") even though the new injector loads. Found on a
+v14.4.1 board: the same probe command run by hand on the target passed after the
+install. Now a successful install clears the verdict and runs the probe again.
 
 ## Consequences
 
