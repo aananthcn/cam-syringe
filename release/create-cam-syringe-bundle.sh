@@ -250,9 +250,24 @@ collect_and_copy "$CAMSYRINGE_BIN"
 collect_and_copy "$QXCB_PLUGIN"
 echo "  -> ${#STAGED[@]} shared librar$([[ ${#STAGED[@]} -eq 1 ]] && echo y || echo ies) staged (closure + libVector_BLF)"
 
+# glibc itself is NOT bundled (see EXCLUDE_SONAME_RE), so the bundle only runs on a machine whose
+# glibc is at least as new as the newest symbol version anything in it needs. Derived from the staged
+# files, not hand-maintained, and checked by the installer and by run-camsyringe.sh so an older
+# distro (e.g. Ubuntu 22.04/24.04) stops with a clear message instead of "GLIBC_x.y not found".
+MIN_GLIBC="$(find "$STAGE" -type f \( -name '*.so*' -o -path '*/bin/*' \) -exec objdump -T {} + 2>/dev/null \
+    | grep -o 'GLIBC_[0-9][0-9.]*' | sed 's/GLIBC_//' | sort -Vu | tail -1)"
+MIN_GLIBC="${MIN_GLIBC:-2.0}"
+echo "  -> needs glibc >= $MIN_GLIBC on the target machine"
+
 echo "Staging run-camsyringe.sh..."
 cat > "$STAGE/run-camsyringe.sh" <<'RUNNER_EOF'
 #!/bin/sh
+# glibc is not bundled; refuse an older one with a clear message (docs: bundle needs glibc >= @MIN_GLIBC@).
+_glibc="$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{print $2}')"
+if [ -n "$_glibc" ] && [ "$(printf '%s\n%s\n' "@MIN_GLIBC@" "$_glibc" | sort -V | head -n1)" != "@MIN_GLIBC@" ]; then
+    echo "camsyringe needs glibc @MIN_GLIBC@ or newer (this system has $_glibc) -- use Ubuntu 26.04." >&2
+    exit 1
+fi
 # Launcher for the camsyringe bundle -- points LD_LIBRARY_PATH at the
 # bundled lib/ (camsyringe's own embedded RUNPATH points at the ORIGINAL
 # build machine's absolute path, useless here -- LD_LIBRARY_PATH
@@ -328,6 +343,7 @@ fi
 
 exit $STATUS
 RUNNER_EOF
+sed -i "s/@MIN_GLIBC@/$MIN_GLIBC/g" "$STAGE/run-camsyringe.sh"
 chmod +x "$STAGE/run-camsyringe.sh"
 
 echo "-----------------------------------------------------------"
@@ -377,6 +393,12 @@ cat > "$HEADER" <<HEADER_EOF
 set -e
 
 INSTALL_DIR="\${CAMSYRINGE_INSTALL_DIR:-${INSTALL_DIR_DEFAULT}}"
+
+_glibc="\$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{print \$2}')"
+if [ -n "\$_glibc" ] && [ "\$(printf '%s\n%s\n' "${MIN_GLIBC}" "\$_glibc" | sort -V | head -n1)" != "${MIN_GLIBC}" ]; then
+    echo "ERROR: this bundle needs glibc ${MIN_GLIBC} or newer (this system has \$_glibc) -- use Ubuntu 26.04." >&2
+    exit 1
+fi
 
 echo "camsyringe bundle installer (v${BUNDLE_VERSION})"
 echo "Install directory: \$INSTALL_DIR"

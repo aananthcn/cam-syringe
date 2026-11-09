@@ -37,8 +37,8 @@
          admin credentials to satisfy the UAC prompt, or the prompt/
          feature is blocked outright by Group Policy -- prints a banner
          telling you to raise an IT ticket instead of failing raw.
-      2. Checks for the target WSL distro (default Ubuntu-22.04),
-         installs it if missing (first run of a fresh distro needs you
+      2. Checks for the target WSL distro (default Ubuntu-26.04 -- the bundle needs its glibc, older
+         Ubuntu releases cannot run it), installs it if missing (first run of a fresh distro needs you
          to set a Linux username/password interactively -- the script
          exits and asks you to re-run after that's done).
       3. Configures WSL2 "mirrored" networking mode in %USERPROFILE%\.wslconfig
@@ -71,7 +71,8 @@
     install-camsyringe.cmd needs no arguments at all).
 
 .PARAMETER DistroName
-    WSL distro to install into. Default: Ubuntu-22.04.
+    WSL distro to install into. Default: Ubuntu-26.04. The bundle uses the
+    distro's own glibc, so older Ubuntu releases cannot run it.
 
 .PARAMETER InstallDirInWsl
     Where the bundle installs to INSIDE the WSL distro (passed straight
@@ -106,7 +107,7 @@
 param(
     [string]$BundlePath = "",
 
-    [string]$DistroName = "Ubuntu-22.04",
+    [string]$DistroName = "Ubuntu-26.04",
 
     [string]$InstallDirInWsl = "~/camsyringe"
 )
@@ -238,9 +239,36 @@ if (-not $wslInstalled) {
 Write-Host "== Checking for WSL distro '$DistroName' =="
 $existingDistros = @()
 try {
-    $existingDistros = (wsl -l -q) | ForEach-Object { $_.Trim().TrimEnd([char]0) } | Where-Object { $_ -ne "" }
+    # wsl.exe prints UTF-16; strip the NULs a console decode leaves between characters.
+    $existingDistros = (wsl -l -q) | ForEach-Object { ($_ -replace [char]0, "").Trim() } | Where-Object { $_ -ne "" }
 } catch {
     $existingDistros = @()
+}
+
+# A distro's registered name says nothing about its release: "wsl --install Ubuntu" registers a
+# distro called "Ubuntu" that may well be 26.04. So unless -DistroName was given, accept any
+# installed Ubuntu whose own /etc/os-release says 26.04 or newer (the bundle needs that glibc).
+if ($existingDistros -notcontains $DistroName -and -not $PSBoundParameters.ContainsKey("DistroName")) {
+    foreach ($d in ($existingDistros | Where-Object { $_ -like "Ubuntu*" })) {
+        # -e runs cat directly, with no shell in between: through "--" the distro's login shell would
+        # expand $ID/$VERSION_ID itself (to nothing) before sh ever saw them.
+        $osRelease = (wsl -d $d -e cat /etc/os-release 2>$null | Out-String) -replace [char]0, ""
+        $id = if ($osRelease -match '(?m)^ID="?([^"\r\n]+)') { $Matches[1] } else { "" }
+        $ver = if ($osRelease -match '(?m)^VERSION_ID="?(\d+)\.(\d+)') { [int]$Matches[1] * 100 + [int]$Matches[2] } else { 0 }
+        Write-Host "  Distro '$d': ID=$id VERSION_ID=$($ver / 100)"
+        if ($id -eq "ubuntu" -and $ver -ge 2604) {
+            Write-Host "Using existing distro '$d'."
+            $DistroName = $d
+            break
+        }
+    }
+}
+
+if ($existingDistros -notcontains $DistroName) {
+    $older = @($existingDistros | Where-Object { $_ -like "Ubuntu*" })
+    if ($older.Count -gt 0) {
+        Write-Host "Found Ubuntu distro(s) ($($older -join ', ')), but none is Ubuntu 26.04 or newer, which this CamSyringe bundle needs (glibc). Installing $DistroName next to them."
+    }
 }
 
 if ($existingDistros -notcontains $DistroName) {

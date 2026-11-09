@@ -136,7 +136,7 @@ as on native Linux (this needs `sudo`, which is why it's separate — the
 installer avoids needing the Linux `sudo` password):
 
 ```powershell
-wsl -d Ubuntu-22.04 -- sudo setcap cap_net_raw+ep ~/camsyringe/bin/camsyringe
+wsl -d Ubuntu-26.04 -- sudo setcap cap_net_raw+ep ~/camsyringe/bin/camsyringe
 ```
 
 Re-run this after every fresh bundle install (a new binary means the
@@ -154,7 +154,7 @@ Linux-side fonts). One more one-time step *inside WSL* fixes it, same
 automatically:
 
 ```powershell
-wsl -d Ubuntu-22.04 -- sudo bash -c "apt-get update && apt-get install -y fonts-noto-color-emoji fonts-noto-symbols fonts-noto-symbols2"
+wsl -d Ubuntu-26.04 -- sudo bash -c "apt-get update && apt-get install -y fonts-noto-color-emoji fonts-noto-symbols fonts-noto-symbols2"
 ```
 
 No reboot or WSL restart needed — close and reopen CamSyringe and the
@@ -189,14 +189,14 @@ streaming still works, BLF replay won't.
 
 ## Manual setup (if the installer doesn't work as written)
 
-1. Install WSL2 + a distro (elevated PowerShell): `wsl --install -d Ubuntu-22.04`, reboot if asked, finish the Linux user/password prompt.
+1. Install WSL2 + a distro (elevated PowerShell): `wsl --install -d Ubuntu-26.04`, reboot if asked, finish the Linux user/password prompt.
 2. `notepad $env:USERPROFILE\.wslconfig`, add:
    ```
    [wsl2]
    networkingMode=mirrored
    ```
    then `wsl --shutdown` and reopen your WSL terminal.
-3. Copy `camsyringe_bundle_vX.Y.bin` into the distro (e.g. via `\\wsl.localhost\Ubuntu-22.04\tmp\`) and, inside a WSL terminal:
+3. Copy `camsyringe_bundle_vX.Y.bin` into the distro (e.g. via `\\wsl.localhost\Ubuntu-26.04\tmp\`) and, inside a WSL terminal:
    ```bash
    chmod +x /tmp/camsyringe_bundle_v0.5.bin
    /tmp/camsyringe_bundle_v0.5.bin
@@ -204,7 +204,7 @@ streaming still works, BLF replay won't.
    sudo apt-get update && sudo apt-get install -y fonts-noto-color-emoji fonts-noto-symbols fonts-noto-symbols2  # only if menu/button icons show as empty boxes
    ```
 4. Run it: `~/camsyringe/run-camsyringe.sh` — the Qt window should appear on the Windows desktop via WSLg. If it doesn't, confirm WSLg itself is working first with a simpler GUI test (Microsoft's docs cover this) before assuming it's a CamSyringe-specific problem.
-5. Optional: create your own Start Menu shortcut pointing at a `.cmd` file containing `wsl.exe -d Ubuntu-22.04 -- bash -lc "~/camsyringe/run-camsyringe.sh %*"`.
+5. Optional: create your own Start Menu shortcut pointing at a `.cmd` file containing `wsl.exe -d Ubuntu-26.04 -- bash -lc "~/camsyringe/run-camsyringe.sh %*"`.
 
 ## Files here
 

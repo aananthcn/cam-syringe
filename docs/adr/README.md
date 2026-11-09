@@ -62,4 +62,4 @@ to carry the comment today.
 - [0016. Any QCarCam id from 0 to 16 can be injected, and no id is special-cased](0016-any-camera-id-0-to-16-and-no-hardcoded-id-list.md)
 - [0017. Live target-side statistics are printed on the PC terminal](0017-live-target-statistics-on-the-pc-terminal.md)
 - [0018. The supported target is QNX 8.0 with the current Qualcomm BSP, and it is checked on connect](0018-supported-target-platform-is-qnx-8-and-is-checked-on-connect.md)
-- [0019. The install clears its own leftovers from the target's `/tmp`](0019-bundle-upload-clears-old-copies-from-the-target-tmp.md)
+- [0019. The bundle is staged in `/var/opt/tmp`, not in the target's RAM](0019-tmp-dir-for-bundle-upload-and-install.md)

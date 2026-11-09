@@ -8,6 +8,10 @@
 
 #include <QApplication>
 #include <QCoreApplication>
+#include <QIcon>
+#include <QPainter>
+#include <QPixmap>
+#include <QStyleFactory>
 
 #include <cstdio>
 #include <cstdlib>
@@ -16,6 +20,32 @@
 #include <vector>
 
 namespace {
+
+// Window icon drawn in code (there is no icon asset). Without one, WSLg shows a blank white square in
+// the title bar and taskbar.
+QIcon makeAppIcon() {
+    QIcon icon;
+    for (int size : {16, 32, 48, 64, 128, 256}) {
+        QPixmap pm(size, size);
+        pm.fill(Qt::transparent);
+        QPainter p(&pm);
+        p.setRenderHint(QPainter::Antialiasing);
+        p.setBrush(QColor(0x2a, 0x6f, 0xb8));
+        p.setPen(Qt::NoPen);
+        p.drawRoundedRect(QRectF(0, 0, size, size), size * 0.2, size * 0.2);
+        p.setPen(Qt::white);
+        QFont f;
+        f.setBold(true);
+        f.setPixelSize(int(size * 0.5));
+        p.setFont(f);
+        p.drawText(QRectF(0, 0, size, size), Qt::AlignCenter, QStringLiteral("CS"));
+        icon.addPixmap(pm);
+    }
+    return icon;
+}
+
+// Windows runs CamSyringe inside WSL2 (WSLg); WSL_DISTRO_NAME is set for every process in a WSL distro.
+bool runningInWsl() { return qEnvironmentVariableIsSet("WSL_DISTRO_NAME"); }
 
 // TEMPORARY, interim default while this board's IPv6 socket creation is
 // broken at the platform level (confirmed not a qcarcam_dispatcher/
@@ -241,6 +271,12 @@ int main(int argc, char** argv) {
     // the dialog opened empty (docs/adr/0013).
     QApplication app(argc, argv);
     QCoreApplication::setApplicationName(QStringLiteral("camsyringe"));
+    // Windows (WSL) only: a window icon and the Fusion style, so the window looks the same as on the
+    // Linux desktop. Native Linux keeps its own look.
+    if (runningInWsl()) {
+        app.setWindowIcon(makeAppIcon());
+        app.setStyle(QStyleFactory::create(QStringLiteral("Fusion")));
+    }
 
     // Remembered Camera Injection configuration (docs/adr/0013): the command line wins for every option it
     // gave, then the saved file, then the built-in defaults (camsyringe::mergeLaunchConfig, which has its own

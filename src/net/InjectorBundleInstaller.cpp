@@ -57,18 +57,20 @@ void InjectorBundleInstaller::installAsync(TargetSsh& ssh, QString target, int c
         }
 
         QString bundleName = QFileInfo(bundlePath).fileName();
-        // docs/adr/0019: /tmp on the target is a 64 MB RAM disk and a bundle is ~32 MB, so a copy
-        // left by an earlier install (this class used to leave it) makes the next upload fail
-        // with "write remote ...: Failure". Clear every earlier bundle first.
+        // docs/adr/0019: the bundle is staged on the persistent disk, never in the target's RAM
+        // (/tmp is a 64 MB RAM disk). Earlier bundles go first, including any an older CamSyringe
+        // left in /tmp. This must stay outside /var/opt/bin|lib|include, which the step above wipes.
         TargetSsh::Result clean =
-            ssh.run(target, "rm -f /tmp/qcarcam_injector_bundle_*.bin", 15000);
+            ssh.run(target,
+                    "mkdir -p /var/opt/tmp && rm -f /var/opt/tmp/qcarcam_injector_bundle_*.bin "
+                    "/tmp/qcarcam_injector_bundle_*.bin",
+                    15000);
         if (!clean.ok()) {
-            onDone(false, "Failed to clear earlier bundle copies from /tmp on the target: " +
-                              clean.stdErr);
+            onDone(false, "Failed to prepare /var/opt/tmp on the target: " + clean.stdErr);
             return;
         }
         progress(-1, "Transferring " + bundleName + " to " + target + "...");
-        TargetSsh::Result scp = ssh.scp(bundlePath, target, "/tmp/", 300000); // up to 5 min for ~180MB
+        TargetSsh::Result scp = ssh.scp(bundlePath, target, "/var/opt/tmp/", 300000); // up to 5 min for ~180MB
         if (!scp.ok()) {
             onDone(false, "Transfer failed: " + scp.stdErr);
             return;
@@ -79,15 +81,15 @@ void InjectorBundleInstaller::installAsync(TargetSsh& ssh, QString target, int c
         // create-qcarcam-inj-bundle.py; this class only handles the
         // removal step above that installer deliberately never does.
         TargetSsh::Result install =
-            ssh.run(target, QString("chmod +x /tmp/%1 && /tmp/%1").arg(bundleName), 60000);
+            ssh.run(target, QString("chmod +x /var/opt/tmp/%1 && /var/opt/tmp/%1").arg(bundleName), 60000);
         if (!install.ok()) {
             onDone(false, "Install failed: " + install.stdErr);
             return;
         }
 
-        // The installer has run; the uploaded copy is only taking RAM-disk space now (docs/adr/0019).
+        // The installer has run; the uploaded copy is only taking disk space now (docs/adr/0019).
         // Best-effort and kept on a failed install above, so it can be inspected or re-run by hand.
-        ssh.run(target, QString("rm -f /tmp/%1").arg(bundleName), 15000);
+        ssh.run(target, QString("rm -f /var/opt/tmp/%1").arg(bundleName), 15000);
 
         progress(85, "Refreshing real-camera reference library on " + target + "...");
         // Best-effort, not fatal on failure -- see net/RealRefSync.h's own
