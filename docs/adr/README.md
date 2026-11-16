@@ -63,3 +63,6 @@ to carry the comment today.
 - [0017. Live target-side statistics are printed on the PC terminal](0017-live-target-statistics-on-the-pc-terminal.md)
 - [0018. The supported target is QNX 8.0 with the current Qualcomm BSP, and it is checked on connect](0018-supported-target-platform-is-qnx-8-and-is-checked-on-connect.md)
 - [0019. The bundle is staged in `/var/opt/tmp`, not in the target's RAM](0019-tmp-dir-for-bundle-upload-and-install.md)
+- [0020. Install Injector is refused on a BSP older than the one the bundle is built for](0020-install-is-refused-on-a-bsp-older-than-the-bundle.md)
+- [0021. A failed install writes a diagnostic log on the target and names it on the console](0021-install-failure-writes-a-diagnostic-log-on-the-target.md)
+- [0022. The injector links `cache_init` itself; per-BSP variants are deferred until a real ABI difference is seen](0022-injector-links-cache-init-itself-and-bsp-variants-are-deferred.md)

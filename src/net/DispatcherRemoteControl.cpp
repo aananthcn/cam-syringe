@@ -1,5 +1,6 @@
 #include "net/DispatcherRemoteControl.h"
 
+#include "net/InstallLog.h"
 #include "net/TargetSsh.h"
 #include "net/TcpConnect.h"
 
@@ -98,7 +99,11 @@ const char* kKillAllCommand =
 
 bool DispatcherRemoteControl::ensureRunning(TargetSsh& ssh, const QString& target, int controlPort,
                                              QString* error) {
-    TargetSsh::Result r = ssh.run(target, buildStartCommand(target), 15000);
+    const QString startCmd = buildStartCommand(target);
+    installLog("dispatcher", "start: ssh run (timeout 15000 ms): " + startCmd);
+    TargetSsh::Result r = ssh.run(target, startCmd, 15000);
+    installLog("dispatcher", QString("start: exit=%1, stdout=%2 B, stderr=%3").arg(r.exitCode)
+                   .arg(r.stdOut.toUtf8().size()).arg(r.stdErr.trimmed().isEmpty() ? QString("(empty)") : r.stdErr.trimmed()));
     // Poll the control port regardless of r.ok() -- confirmed for real
     // that the ssh client itself can time out here ("ssh did not
     // complete in time") even though the remote start actually
@@ -126,9 +131,12 @@ bool DispatcherRemoteControl::ensureRunning(TargetSsh& ssh, const QString& targe
     // while the dispatcher hadn't even been spawned yet. 40s covers that
     // 30s worst case plus margin for the dispatcher itself to actually
     // bind its socket afterward.
+    installLog("dispatcher", QString("polling control port %1:%2 for up to 40 s").arg(target).arg(controlPort));
     if (pollControlPort(target, controlPort, 40000)) {
+        installLog("dispatcher", "control port is accepting connections");
         return true;
     }
+    installLog("dispatcher", "control port did NOT come up within 40 s");
     if (error) {
         *error = r.ok() ? "qcarcam_dispatcher didn't come up within 40s of starting it."
                          : "Couldn't start qcarcam_dispatcher on the target: " + r.stdErr;
@@ -138,7 +146,9 @@ bool DispatcherRemoteControl::ensureRunning(TargetSsh& ssh, const QString& targe
 
 bool DispatcherRemoteControl::restart(TargetSsh& ssh, const QString& target, int controlPort,
                                        QString* error) {
-    ssh.run(target, kKillAllCommand, 10000); // best-effort -- nothing running is fine too
+    TargetSsh::Result k = ssh.run(target, kKillAllCommand, 10000); // best-effort -- nothing running is fine too
+    installLog("dispatcher", QString("kill old processes: exit=%1, stderr=%2").arg(k.exitCode)
+                   .arg(k.stdErr.trimmed().isEmpty() ? QString("(empty)") : k.stdErr.trimmed()));
     return ensureRunning(ssh, target, controlPort, error);
 }
 
