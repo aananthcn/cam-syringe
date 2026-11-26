@@ -8,7 +8,7 @@ class TargetSsh;
 
 // Starts/restarts qcarcam_dispatcher on the target over SSH (via
 // TargetSsh -- ensureAuth() must have already succeeded for `target`),
-// so a teammate never has to SSH in and run run_qcarcam.sh (or kill a
+// so a teammate never has to SSH in and run run_injector.sh (or kill a
 // stale process) by hand. Two callers:
 //   - MainWindow's Play-time retry, when the control-channel connection
 //     to the target fails outright (dispatcher not running at all).
@@ -29,7 +29,7 @@ public:
     // (whole start subshell redirected+backgrounded, not just the final
     // command -- see kStartCommand's own comment in the .cpp for why that
     // scope matters, confirmed for real) via /var/opt/env.sh +
-    // run_qcarcam.sh -- passing run_qcarcam.sh's own --ipv4 flag
+    // run_injector.sh -- passing run_injector.sh's own --ipv4 flag
     // automatically whenever `target` isn't an IPv6 literal (see
     // buildStartCommand() in the .cpp), so the dispatcher always binds
     // the same family CamSyringe is about to connect on; no separate
@@ -39,12 +39,17 @@ public:
     // command itself returned cleanly -- confirmed for real that ssh can
     // time out here while the dispatcher still comes up fine; only report
     // failure if the port never does. The 40s figure isn't arbitrary:
-    // run_qcarcam.sh's own source waits up to a hard 30s for the target's
+    // run_injector.sh's own source waits up to a hard 30s for the target's
     // display service on a cold start BEFORE it ever starts
     // qcarcam_dispatcher at all -- a shorter poll (this used to be 10s)
     // reported a real, live-confirmed false-negative "didn't come up"
     // failure from a fresh Install Injector's post-install restart, while
     // the dispatcher was, moments later, demonstrably running fine.
+    // Read-only: true in *running* iff `pidin` lists qcarcam_dispatcher. Returns false (and leaves
+    // *running untouched) when the target could not be asked at all, so a caller never starts a
+    // second dispatcher on the strength of a failed SSH call.
+    static bool isRunning(TargetSsh& ssh, const QString& target, bool* running);
+
     static bool ensureRunning(TargetSsh& ssh, const QString& target, int controlPort,
                                QString* error);
 

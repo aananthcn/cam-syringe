@@ -65,3 +65,4 @@ to carry the comment today.
 - [0019. The bundle is staged in `/var/opt/tmp`, not in the target's RAM](0019-tmp-dir-for-bundle-upload-and-install.md)
 - [0020. A failed install writes a diagnostic log on the target and names it on the console](0020-install-failure-writes-a-diagnostic-log-on-the-target.md)
 - [0021. Install Injector is never refused because of the BSP version](0021-install-is-not-refused-on-any-bsp-version.md)
+- [0022. CamSyringe checks every 15 seconds that the dispatcher runs on the target, and starts it if not](0022-dispatcher-health-check-every-15-seconds.md)

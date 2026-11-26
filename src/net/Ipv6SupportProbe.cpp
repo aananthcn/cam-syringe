@@ -24,7 +24,7 @@ void Ipv6SupportProbe::checkAsync(TargetSsh& ssh, QString target, QString sshUse
         // Scratch port (59991, nowhere near the real control port or any
         // RTP port) -- never collides with, or disturbs, an
         // already-running real session. Runs the binary directly, not
-        // via run_qcarcam.sh -- socket()/bind()/listen() happens at the
+        // via run_injector.sh -- socket()/bind()/listen() happens at the
         // very top of main(), before any display-service dependency, so
         // this is fast and self-contained. Backgrounded, killed after
         // 1s, then waited on so the whole command line (and this SSH

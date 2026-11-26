@@ -24,7 +24,7 @@ rebuilds of v0.10 look identical. Two different questions were being mixed up:
 
 - **The bundle carries a manifest** (`create-qcarcam-inj-bundle.py`): an MD5 for
   each file the project itself builds or writes (the four `qcarcam_*` binaries,
-  `run_qcarcam.sh`, `env.sh`, `libqcxclient_shim.so`) and a **build id**, the
+  `run_injector.sh`, `env.sh`, `libqcxclient_shim.so`) and a **build id**, the
   first 12 hex digits of the MD5 of the manifest text. The id changes whenever any
   listed file does, even at the same version number. ffmpeg and SDL2 are left out
   on purpose: they rarely change and would only add noise.

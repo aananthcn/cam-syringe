@@ -41,7 +41,7 @@ namespace camsyringe {
 // this sender) can wedge the target's hardware decoder at the OS driver
 // level, sometimes recoverable only by a full target power-cycle, not an
 // app-level restart. Don't run a second sender session against an
-// already-fed receiver process; restart run_qcarcam.sh on the target
+// already-fed receiver process; restart run_injector.sh on the target
 // first.
 //
 // Multi-camera / UI hooks (setStartOrigin/setFrameCallback/setErrorCallback

@@ -15,7 +15,7 @@ and Plays that took a minute or more.
   `( cmd & )` didn't detach either. `A || B &` also failed to detach `B`.
   Only a single simple command backgrounded from the outside, or
   `A ; B &` / `if ! A; then B & fi`, detached. The start command
-  `. /var/opt/env.sh && nohup run_qcarcam.sh` is compound, so it blocked.
+  `. /var/opt/env.sh && nohup run_injector.sh` is compound, so it blocked.
 - The dispatcher accepts exactly one connection at a time
   (`qcarcam-injector` ADR 0015). The version probe opens its own short-lived
   connection. While a session held the main one, the probe's `connect()`
@@ -28,7 +28,7 @@ and Plays that took a minute or more.
 - **The start command is shaped for this shell**, `buildStartCommand()` in
   `DispatcherRemoteControl.cpp`:
   `if ! pidin | grep -qi qcarcam_dispatcher; then sh -c '. /var/opt/env.sh &&
-  exec run_qcarcam.sh [--ipv4]' >/tmp/qcarcam_dispatcher.log 2>&1 </dev/null & fi`.
+  exec run_injector.sh [--ipv4]' >/tmp/qcarcam_dispatcher.log 2>&1 </dev/null & fi`.
   An `if`/`then` replaces `||`, and a nested `sh -c` means the outer shell
   backgrounds one simple command. No pty is allocated (`-t` is never used), so
   no `disown` is needed. Verified to return in about 0.2 s. `--ipv4` is

@@ -40,7 +40,7 @@ declaration, whether to. The target-side half of this decision is
 - **Done (this repo):** GUI label and CLI help wording.
 - **Done in source (`qcarcam-injector`), unverified:** the dispatcher now
   starts the display services itself, only for a declaration without
-  `--inject-only`, and `run_qcarcam.sh` no longer starts them at launch.
+  `--inject-only`, and `run_injector.sh` no longer starts them at launch.
   That change has not been compiled or run on a board yet. See the
   target-side ADR's "Implementation status".
 

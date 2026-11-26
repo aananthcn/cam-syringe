@@ -112,7 +112,7 @@ CameraConfigDialog::CameraConfigDialog(const QString& initialTarget, int initial
     // one of the two known default addresses; it's never read anywhere
     // else. The actual family used everywhere (the control-channel
     // connection, and which flag DispatcherRemoteControl passes
-    // run_qcarcam.sh) is still derived purely from whatever ends up in
+    // run_injector.sh) is still derived purely from whatever ends up in
     // Target itself (does it contain a ':'), exactly as before this
     // checkbox existed -- so it can never silently disagree with a
     // manually-typed target. Initial state mirrors initialTarget for the

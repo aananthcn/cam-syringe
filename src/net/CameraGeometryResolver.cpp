@@ -233,11 +233,11 @@ void CameraGeometryResolver::resolveAsync(TargetSsh& ssh, QString target, QStrin
                 // qcarcam_test also needs the display service up
                 // (confirmed live: without it, it fails at its own
                 // "test_util_init failed 1" step, well before reaching
-                // the Queried Inputs dump this probe needs) -- run_qcarcam.sh's
+                // the Queried Inputs dump this probe needs) -- run_injector.sh's
                 // own ensure-block is ported here VERBATIM (guarded on
                 // /dev/openwfd_server_0 first: calling
                 // start-display-service.sh a SECOND time while already
-                // running corrupts the display -- see run_qcarcam.sh's
+                // running corrupts the display -- see run_injector.sh's
                 // own comment on this exact hazard).
                 QString probePath = QStringLiteral("/tmp/camsyringe_probe_%1.xml").arg(id);
                 QString cmd = QStringLiteral(
@@ -258,7 +258,7 @@ void CameraGeometryResolver::resolveAsync(TargetSsh& ssh, QString target, QStrin
                                   // fails with "cannot execute") -- NOT just this one
                                   // board's variant, per this project's own established
                                   // portable-bounding idiom used everywhere else a command
-                                  // needs a hard runtime cap on this target (run_qcarcam.sh's
+                                  // needs a hard runtime cap on this target (run_injector.sh's
                                   // own dispatcher wait, DispatcherRemoteControl, etc.):
                                   // background + sleep + kill + wait, not `timeout`. Output
                                   // is never redirected away, so it still flows into this

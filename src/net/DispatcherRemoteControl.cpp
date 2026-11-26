@@ -28,7 +28,7 @@ bool pollControlPort(const QString& target, int controlPort, int totalTimeoutMs)
 
 // Idempotent: only spawns if qcarcam_dispatcher isn't already in `pidin`'s
 // output, detached so it survives this SSH connection closing -- see
-// run_qcarcam.sh's own header for what it actually does (ensure the
+// run_injector.sh's own header for what it actually does (ensure the
 // display service is up, then start qcarcam_dispatcher and wait).
 //
 // CONFIRMED FOR REAL against the live target (a prior version of this
@@ -39,22 +39,22 @@ bool pollControlPort(const QString& target, int controlPort, int totalTimeoutMs)
 // sleep 5 ) &`, `( true; sleep 5 ) &`, or a `for` loop all measurably
 // blocked the ssh client for the command's full duration; a single
 // SIMPLE command backgrounded the same way detached in well under a
-// second every time). `. /var/opt/env.sh && nohup run_qcarcam.sh` is a
+// second every time). `. /var/opt/env.sh && nohup run_injector.sh` is a
 // compound command, which is exactly what broke it. Separately, `A || B &`
 // ALSO failed to detach `B` on this shell even when B was already a
 // single simple command -- only `A ; B &` or `if ! A; then B & fi` did.
 // Fixed by combining both workarounds: an `if`/`then` instead of `||`
 // before the backgrounded part, and wrapping the compound "source env.sh
-// then exec run_qcarcam.sh" in a NESTED `sh -c '...'` invocation so the
+// then exec run_injector.sh" in a NESTED `sh -c '...'` invocation so the
 // OUTER shell only ever sees ONE simple command to background (`sh`,
 // with two arguments) -- verified on the live target to return in ~0.2s
 // either way (dispatcher already running, or freshly started) instead of
-// blocking for its full run_qcarcam.sh startup time (which itself can
+// blocking for its full run_injector.sh startup time (which itself can
 // run well past this function's own ssh timeout on a cold display-
 // service start -- see ensureRunning()'s own comment for why a timeout
 // here still isn't treated as fatal, kept as defense in depth even after
 // this fix). `exec` (not a second `&&`-joined command) hands off the
-// nested shell's own process to run_qcarcam.sh directly, avoiding one
+// nested shell's own process to run_injector.sh directly, avoiding one
 // extra layer of process -- not required for the detach fix itself, just
 // tidier. (No `disown` needed: no pty is ever allocated for this ssh
 // invocation -- see commonSshOpts(), no `-t` -- so there's no
@@ -65,15 +65,15 @@ bool pollControlPort(const QString& target, int controlPort, int totalTimeoutMs)
 // bracketHostIfIPv6/TargetSsh.cpp's bracketIfIPv6, deliberately not
 // shared into a named predicate here since this is the only spot that
 // needs the family for a *decision* rather than for string formatting)
-// -- so run_qcarcam.sh/qcarcam_dispatcher always bind the same family
+// -- so run_injector.sh/qcarcam_dispatcher always bind the same family
 // CamSyringe is about to connect the control channel on. This is an
 // interim workaround for this board's IPv6 socket creation being broken
 // at the platform level (confirmed not a qcarcam_dispatcher/CamSyringe
-// bug -- see run_qcarcam.sh's own header); once fixed, IPv6 targets go
+// bug -- see run_injector.sh's own header); once fixed, IPv6 targets go
 // back to needing nothing special here at all, since that was always
 // qcarcam_dispatcher's own default.
 QString buildStartCommand(const QString& target) {
-    QString runCmd = target.contains(':') ? "run_qcarcam.sh" : "run_qcarcam.sh --ipv4";
+    QString runCmd = target.contains(':') ? "run_injector.sh" : "run_injector.sh --ipv4";
     return "if ! pidin | grep -qi qcarcam_dispatcher; then "
            "sh -c '. /var/opt/env.sh && exec " +
            runCmd +
@@ -97,6 +97,16 @@ const char* kKillAllCommand =
 
 } // namespace
 
+bool DispatcherRemoteControl::isRunning(TargetSsh& ssh, const QString& target, bool* running) {
+    // `[q]carcam_dispatcher` so the grep's own command line, which pidin may list, cannot match.
+    TargetSsh::Result r = ssh.run(
+        target, "if pidin | grep -qi '[q]carcam_dispatcher'; then echo UP; else echo DOWN; fi", 8000);
+    const QString out = r.stdOut.trimmed();
+    if (!r.ok() || (out != "UP" && out != "DOWN")) return false;
+    if (running) *running = (out == "UP");
+    return true;
+}
+
 bool DispatcherRemoteControl::ensureRunning(TargetSsh& ssh, const QString& target, int controlPort,
                                              QString* error) {
     const QString startCmd = buildStartCommand(target);
@@ -107,7 +117,7 @@ bool DispatcherRemoteControl::ensureRunning(TargetSsh& ssh, const QString& targe
     // Poll the control port regardless of r.ok() -- confirmed for real
     // that the ssh client itself can time out here ("ssh did not
     // complete in time") even though the remote start actually
-    // succeeded: run_qcarcam.sh waits up to 30s for the target's display
+    // succeeded: run_injector.sh waits up to 30s for the target's display
     // service to come up before it even starts the dispatcher, and never
     // returns after that (by design, see its own header) -- if anything
     // about that chain doesn't fully detach from the ssh session's own
@@ -123,7 +133,7 @@ bool DispatcherRemoteControl::ensureRunning(TargetSsh& ssh, const QString& targe
     // reported failure ("didn't come up within 10s") while qcarcam_dispatcher
     // was, moments later, demonstrably running fine and its control port
     // accepting connections. Root cause, read directly from
-    // run_qcarcam.sh's own source: on a cold start (display service not
+    // run_injector.sh's own source: on a cold start (display service not
     // already up -- exactly the case right after a fresh flash/reboot,
     // which an Install is disproportionately likely to follow) it waits
     // up to a HARD 30s for /dev/openwfd_server_0 before it EVER starts

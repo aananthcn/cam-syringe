@@ -35,7 +35,7 @@ address across this board family (see `qcarcam-injector`'s own
 
 No separate IPv4/IPv6 *mode* setting drives this anywhere. Both
 `bracketHostIfIPv6()` (CamSyringe's own connect path) and
-`DispatcherRemoteControl`'s remote `run_qcarcam.sh`/`run_qcarcam.sh --ipv4`
+`DispatcherRemoteControl`'s remote `run_injector.sh`/`run_injector.sh --ipv4`
 selection derive the family purely from whether the in-play target
 string contains a `:` — typing either kind of address into `--target`/
 Configure just works. A "Force IPv4" checkbox in `CameraConfigDialog`
@@ -44,7 +44,7 @@ the Target field to one of the two `TargetDefaults.h` constants when
 toggled; it's never read anywhere else, so it can't disagree with a
 manually-typed target.
 
-`qcarcam-injector`'s `run_qcarcam.sh` was extended to accept an optional
+`qcarcam-injector`'s `run_injector.sh` was extended to accept an optional
 `--ipv4` argument, forwarded straight to `qcarcam_dispatcher`'s own
 pre-existing `--ipv4` flag.
 

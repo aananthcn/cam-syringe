@@ -348,6 +348,13 @@ MainWindow::MainWindow(camsyringe::StreamPool* pool, QString initialTarget, int 
     connect(shimStatusTimer_, &QTimer::timeout, this, &MainWindow::refreshShimStatus);
     shimStatusTimer_->start(1000);
 
+    // ADR 0022: dispatcher health check, every 15 s. The first check runs as soon as the
+    // event loop starts (the window is fully built and shown by then), not after 15 s.
+    dispatcherHealthTimer_ = new QTimer(this);
+    connect(dispatcherHealthTimer_, &QTimer::timeout, this, &MainWindow::checkDispatcherHealth);
+    dispatcherHealthTimer_->start(kDispatcherHealthCheckMs);
+    QTimer::singleShot(0, this, &MainWindow::checkDispatcherHealth);
+
     pool_->setPreviewCallback([this](int index, const uint8_t* rgb, int w, int h, int stride) {
         QImage frame(rgb, w, h, stride, QImage::Format_RGB888);
         QImage copy = frame.copy(); // deep copy: rgb buffer is only valid for this callback
@@ -944,6 +951,41 @@ bool MainWindow::invalidateCameraGeometry(int camId) {
                  "re-learned from the target once the session is stopped\n",
                  camId, currentTarget_.toUtf8().constData());
     return true;
+}
+
+void MainWindow::checkDispatcherHealth() {
+    if (currentTarget_.isEmpty() || dispatcherHealthBusy_ || state_ != PlaybackState::Idle ||
+        (installProgressBar_ && installProgressBar_->isVisible()) ||
+        connectivityMonitor_.state() != camsyringe::TargetConnectivityMonitor::State::Reachable) {
+        return; // the next tick tries again
+    }
+    dispatcherHealthBusy_ = true;
+    QString target = currentTarget_;
+    int controlPort = controlPort_;
+    QString sshUser = sshUser_;
+    QString sshKeyPath = sshKeyPath_;
+    std::thread([this, target, controlPort, sshUser, sshKeyPath]() {
+        // Never prompts: this is automatic, not a deliberate login (same as the other
+        // background SSH checks). If SSH is not usable the check just does nothing.
+        auto declineCredentials = [](const QString&, QString*, QString*) { return false; };
+        if (sshSession_.ensureAuth(target, sshUser, sshKeyPath, declineCredentials)) {
+            bool running = false;
+            if (camsyringe::DispatcherRemoteControl::isRunning(sshSession_, target, &running) &&
+                !running) {
+                std::fprintf(stderr, "camsyringe: qcarcam_dispatcher is not running on %s -- "
+                                     "starting it via run_injector.sh\n",
+                             target.toUtf8().constData());
+                QString error;
+                if (!camsyringe::DispatcherRemoteControl::ensureRunning(sshSession_, target,
+                                                                         controlPort, &error)) {
+                    std::fprintf(stderr, "camsyringe: dispatcher start failed: %s\n",
+                                 error.toUtf8().constData());
+                }
+            }
+        }
+        QMetaObject::invokeMethod(this, [this]() { dispatcherHealthBusy_ = false; },
+                                  Qt::QueuedConnection);
+    }).detach();
 }
 
 void MainWindow::tryStartDispatcherThenRetry() {

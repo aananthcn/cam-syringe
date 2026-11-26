@@ -81,6 +81,10 @@ Each camera input can be any video file libavformat can decode; every camera is 
 
 Each camera prints its achieved encode/send FPS to stderr roughly once a second (`camsyringe[cam0]: 24.3 fps (target 30.0 fps)`), so if the PC can't keep multiple cameras real-time (e.g. 4 cameras on a modest CPU), you'll see exactly which ones are falling behind rather than just a vague "it feels laggy."
 
-**Important**: the target's `qcarcam_receiver` only tolerates one continuous stream per process run — restart `run_qcarcam.sh` on the target before each new CamSyringe session; don't start a second streaming session against an already-fed receiver (see `CONTEXT.md`'s "Known gotchas").
+**Dispatcher health check** (0.14.0, [ADR 0022](docs/adr/0022-dispatcher-health-check-every-15-seconds.md)): while idle and with the target reachable, CamSyringe checks over SSH that `qcarcam_dispatcher` runs on the target — once as soon as the app is up, then every 15 seconds — and starts it with `run_injector.sh` if it does not. You no longer need to start it by hand. It needs passwordless SSH (it never prompts) and the injector bundle installed with the 0.14.0 `run_injector.sh`; it does nothing during Play/Pause or an install. Stop still kills the dispatcher, and the check brings it back within 15 seconds.
+
+**Rename** (0.14.0): the target launcher `run_qcarcam.sh` is now `run_injector.sh` (and `qcarcam_testapp.sh` is `run_camtestapp.sh`). Reinstall the injector bundle built from the same release; an older bundle has no `run_injector.sh`, so CamSyringe cannot start the dispatcher on that target.
+
+**Important**: the target's `qcarcam_receiver` only tolerates one continuous stream per process run — restart `run_injector.sh` on the target before each new CamSyringe session; don't start a second streaming session against an already-fed receiver (see `CONTEXT.md`'s "Known gotchas").
 
 Validate a stream is on the wire with Wireshark or `tcpdump -i <iface> udp portrange 5004-5010` (camera RTP) / `tcpdump -i <iface> ether ...` (BLF replay, whatever MAC/protocol the capture used).

@@ -270,6 +270,13 @@ private:
     // up at the same "streaming locally, target unreachable" error banner
     // as before, just after one extra automatic attempt to fix it first.
     void tryStartDispatcherThenRetry();
+
+    // ADR 0022: checks that qcarcam_dispatcher runs on the target and starts it (via
+    // run_injector.sh) when it doesn't. Runs once as soon as the app is up, then every
+    // kDispatcherHealthCheckMs. Skipped (not queued) while no target is set, the target is not
+    // Reachable, a Play/Pause session is active, an install is running, or the previous check is
+    // still in flight.
+    void checkDispatcherHealth();
     // Fire-and-forget: SSHes in (via sshSession_) and kills all four
     // qcarcam-injector binaries on the target -- called from
     // onStopTriggered() only (not Pause, not window close), so Stop
@@ -483,6 +490,7 @@ private:
     // those stay as-is for the (already-confirmed-reachable) target
     // they're bounding.
     static constexpr int kReachabilityTimeoutMs = 2000;
+    static constexpr int kDispatcherHealthCheckMs = 15 * 1000; // ADR 0022
     // True only between beginReachabilityCheck() starting and its outcome
     // being decided (onReachabilityCheckResult() or
     // cancelReachabilityCheck()) -- i.e. exactly the window in which
@@ -601,6 +609,8 @@ private:
     // timer's refreshShimStatus() calls are what actually notice a target
     // coming back, closing the loop double-clicking alone couldn't.
     QTimer* shimStatusTimer_ = nullptr;
+    QTimer* dispatcherHealthTimer_ = nullptr;
+    bool dispatcherHealthBusy_ = false;
     // Lives in the status bar (addPermanentWidget(), bottom-right, next to
     // the message text set alongside it) -- hidden except during an
     // active "Install Injector" run. Determinate (fixed step percentages,
