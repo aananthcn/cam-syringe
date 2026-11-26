@@ -81,7 +81,6 @@ set(CAMSYRINGE_SOURCES
     src/net/DispatcherVersionProbe.cpp
     src/net/InjectorBundleInstaller.cpp
     src/net/InstallLog.cpp
-    src/net/TargetBsp.cpp
     src/net/TargetDiagnostics.cpp
     src/net/Ipv6SupportProbe.cpp
     src/net/QcxVersionProbe.cpp

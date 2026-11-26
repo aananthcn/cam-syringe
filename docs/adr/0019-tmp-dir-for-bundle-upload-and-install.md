@@ -56,6 +56,6 @@ After a successful install from CamSyringe, `/var/opt/tmp` holds no
 - A failed install leaves the bundle on the persistent disk, so it survives a reboot.
   The next install removes it.
 - `/var/opt/tmp` is a new directory under the install root. Nothing else may use it, except
-  the diagnostic log of [ADR 0021](0021-install-failure-writes-a-diagnostic-log-on-the-target.md),
+  the diagnostic log of [ADR 0020](0020-install-failure-writes-a-diagnostic-log-on-the-target.md),
   `qcarcam_install_diag.log`, which a failed install writes there.
 - The camera-pipeline logs remain in RAM (see the last Decision item).

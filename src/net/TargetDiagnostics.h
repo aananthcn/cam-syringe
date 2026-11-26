@@ -6,7 +6,7 @@
 
 namespace camsyringe {
 
-// docs/adr/0021: when the injector bundle exits non-zero on the target, a diagnostic log is
+// docs/adr/0020: when the injector bundle exits non-zero on the target, a diagnostic log is
 // written ON THE TARGET, in /var/opt/tmp, so whoever is at that board can copy one file and send
 // it. It records the BSP version, the library search path, every installed file against the
 // bundle's manifest, and for each program what happened when it was started (the loader's exact

@@ -1,4 +1,4 @@
-# 0021. A failed install writes a diagnostic log on the target and names it on the console
+# 0020. A failed install writes a diagnostic log on the target and names it on the console
 
 Status: Accepted. The script is tested on the host (`tests/install_diagnostics_test.cpp`,
 under `/bin/sh` against a fake install tree); not yet run on a board's ksh.
@@ -48,3 +48,19 @@ copy a file and send it.
 - It runs only on a failed bundle run. A failed scp, `mkdir` or `rm` reports their own
   stderr and does not write this log.
 - The log may name host and board paths, not credentials.
+
+## Lessons
+
+- **Report what was observed, not a guessed cause.** The first summary line said a missing
+  symbol meant "this board's BSP lacks the library or the version that provides it". The symbol
+  was missing because of how the injector was linked, not because of the BSP. A diagnostic
+  should state facts (the symbol, where it is and is not found) and leave the cause to the
+  reader.
+- **Find out why a failure is silent before adding more checks.** The 0.12.x installs failed
+  with an empty message because the bundle's `set -e` ended it when a program failed to load,
+  and the dialog showed only stderr. Capture the exit code and both streams.
+- **People at a failing board can copy a file.** A log that is written on the target, named on
+  the console and read back is more reliable than asking someone to re-run with a trace.
+- **A load check has to start the program.** `ldd` lists libraries and does not resolve
+  symbols on QNX; the log runs `--help` and reports the loader's own message.
+

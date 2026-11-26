@@ -2,7 +2,6 @@
 
 #include "net/DispatcherRemoteControl.h"
 #include "net/InstallLog.h"
-#include "net/TargetBsp.h"
 #include "net/TargetDiagnostics.h"
 #include "net/RealRefSync.h"
 #include "net/TargetSsh.h"
@@ -76,26 +75,9 @@ void InjectorBundleInstaller::installAsync(TargetSsh& ssh, QString target, int c
             return;
         }
 
-        // docs/adr/0020: refuse before anything on the target is touched (the install below deletes
-        // the previous one first) if the board's BSP is older than the one the bundle is built for.
-        TargetSsh::Result osr =
-            loggedRun(ssh, target, "target-os-release", "cat /etc/os-release; uname -a", 15000);
-        TargetBsp bsp = TargetBsp::classify(osr.ok() ? osr.stdOut : QString());
-        logLine(QString("BSP check: %1 -> verdict %2. %3")
-                    .arg(bsp.versionId.isEmpty() ? QString("(no VERSION_ID)") : bsp.versionId)
-                    .arg(bsp.verdict == TargetBsp::Verdict::Verified   ? "verified"
-                         : bsp.verdict == TargetBsp::Verdict::Untested ? "untested (newer)"
-                         : bsp.verdict == TargetBsp::Verdict::TooOld   ? "TOO OLD, refused"
-                                                                       : "unknown, not blocked")
-                    .arg(bsp.message));
-        if (bsp.verdict == TargetBsp::Verdict::TooOld) {
-            if (qEnvironmentVariableIntValue("CAMSYRINGE_ALLOW_UNSUPPORTED_BSP") != 0) {
-                logLine("BSP check overridden by CAMSYRINGE_ALLOW_UNSUPPORTED_BSP: installing anyway");
-            } else {
-                onDone(false, "Not installing: unsupported BSP on " + target + ".\n\n" + bsp.message);
-                return;
-            }
-        }
+        // docs/adr/0021: the BSP is recorded in the log only, never a reason to
+        // refuse. Whether the programs load is decided by the bundle's own check after the install.
+        loggedRun(ssh, target, "target-os-release", "cat /etc/os-release; uname -a", 15000);
 
         // Confirm before anything destructive (blocking call back onto
         // the GUI thread) -- may rewrite bundlePath/bundleVersion in
@@ -172,7 +154,7 @@ void InjectorBundleInstaller::installAsync(TargetSsh& ssh, QString target, int c
             loggedRun(ssh, target, "run-bundle",
                       QString("chmod +x /var/opt/tmp/%1 && /var/opt/tmp/%1").arg(bundleName), 60000);
         if (!install.ok()) {
-            // docs/adr/0021: write the diagnostic log on the target, and say where it is.
+            // docs/adr/0020: write the diagnostic log on the target, and say where it is.
             TargetDiagnostics::Result diag = TargetDiagnostics::collect(ssh, target, bundleName);
             QString msg = describeFailure(QString("Install failed: %1 exited non-zero on %2")
                                               .arg(bundleName, target), install);

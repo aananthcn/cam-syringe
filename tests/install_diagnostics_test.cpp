@@ -1,4 +1,4 @@
-// Host test of the on-target install diagnostics (docs/adr/0021): renders the script against a
+// Host test of the on-target install diagnostics (docs/adr/0020): renders the script against a
 // fake /var/opt that fails the way the 0.12.2 bug-report board did, runs it under /bin/sh, and
 // checks the log says WHICH file/symbol and WHAT kind of failure.
 //   g++ -std=c++17 -fPIC -Isrc $(pkg-config --cflags Qt6Core) tests/install_diagnostics_test.cpp
